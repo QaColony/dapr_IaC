@@ -3,7 +3,7 @@
 </div>
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/dapr/dapr)](https://goreportcard.com/report/github.com/dapr/dapr)
-[![Docker Pulls](https://img.shields.io/docker/pulls/daprio/dapr)](https://hub.docker.com/r/daprio/dapr)
+[![Docker Pulls](https://img.shields.io/docker/pulls/daprio/daprd)](https://hub.docker.com/r/daprio/dapr)
 [![Build Status](https://github.com/dapr/dapr/workflows/dapr/badge.svg?event=push&branch=master)](https://github.com/dapr/dapr/actions?workflow=dapr)
 [![Scheduled e2e test](https://github.com/dapr/dapr/workflows/dapr-test/badge.svg?event=schedule)](https://github.com/dapr/dapr/actions?workflow=dapr-test)
 [![codecov](https://codecov.io/gh/dapr/dapr/branch/master/graph/badge.svg)](https://codecov.io/gh/dapr/dapr)
@@ -15,8 +15,6 @@
 Dapr is a portable, serverless, event-driven runtime that makes it easy for developers to build resilient, stateless and stateful microservices that run on the cloud and edge and embraces the diversity of languages and developer frameworks.
 
 Dapr codifies the *best practices* for building microservice applications into open, independent, building blocks that enable you to build portable applications with the language and framework of your choice. Each building block is independent and you can use one, some, or all of them in your application.
-
-__Note: Dapr is currently under community development in alpha phase. Dapr is not recommended for production workloads until the 1.0 stable release.__
 
 ![Dapr overview](./img/overview.png)
 
@@ -100,12 +98,9 @@ Every two weeks we host a community call to showcase new features, review upcomi
 
 ### Videos and Podcasts
 
-| Engagement | Link        |
-|:-----------|:------------|
-| 📺 Channel 9 | Azure Friday - Learn All About Distributed Application Runtime Dapr: [Part 1](https://channel9.msdn.com/Shows/Azure-Friday/Learn-all-about-Distributed-Application-Runtime-Dapr-Part-1) and [Part 2](https://channel9.msdn.com/Shows/Azure-Friday/Learn-all-about-Distributed-Application-Runtime-Dapr-Part-2)
-| 🌎 Conferences | - [Dapr, Rudr, OAM: Mark Russinovich presents next gen app development & deployment](https://www.youtube.com/watch?v=eJCu6a-x9uo)<br>- [Mark Russinovich presents "The Future of Cloud Native Applications with OAM and Dapr"](https://myignite.techcommunity.microsoft.com/sessions/82059)<br>- [Build 2020: Mark Fussell presents Dapr](https://channel9.msdn.com/Events/Build/2020/INT118)
-| 🎤 Hanselminutes | [Dapr Distributed Application Runtime with Mark Russinovich](https://hanselminutes.com/718/dapr-distributed-application-runtime-with-azure-cto-mark-russinovich)
-| 💻 Azure Community Live | [Build microservice applications using DAPR with Mark Fussell ](https://www.youtube.com/watch?v=CgqI7nen-Ng)
+We have a variety of keynotes, podcasts, and presentations available to reference and learn from.
+
+📺 Visit https://docs.dapr.io/contributing/presentations/ for previous talks and slide decks.
 
 ### Contributing to Dapr
 

@@ -1,5 +1,5 @@
 // ------------------------------------------------------------
-// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
 // Licensed under the MIT License.
 // ------------------------------------------------------------
 
@@ -7,21 +7,20 @@ package injector
 
 import (
 	"fmt"
+	"strconv"
+	"testing"
 
 	"github.com/stretchr/testify/assert"
 
 	corev1 "k8s.io/api/core/v1"
 
 	"k8s.io/apimachinery/pkg/util/intstr"
-
-	"strconv"
-	"testing"
 )
 
 func TestLogAsJSONEnabled(t *testing.T) {
 	t.Run("dapr.io/log-as-json is true", func(t *testing.T) {
 		fakeAnnotation := map[string]string{
-			daprLogAsJSON: "true",
+			daprLogAsJSON: trueString,
 		}
 
 		assert.Equal(t, true, logAsJSONEnabled(fakeAnnotation))
@@ -88,44 +87,124 @@ func TestGetProbeHttpHandler(t *testing.T) {
 }
 
 func TestGetSideCarContainer(t *testing.T) {
-	annotations := map[string]string{}
-	annotations[daprConfigKey] = "config"
-	annotations[daprAppPortKey] = "5000"
-	annotations[daprLogAsJSON] = "true"
-	annotations[daprAPITokenSecret] = "secret"
-	annotations[daprAppTokenSecret] = "appsecret"
+	t.Run("get sidecar container without debugging", func(t *testing.T) {
+		annotations := map[string]string{}
+		annotations[daprConfigKey] = "config"
+		annotations[daprAppPortKey] = "5000"
+		annotations[daprLogAsJSON] = trueString
+		annotations[daprAPITokenSecret] = "secret"
+		annotations[daprAppTokenSecret] = "appsecret"
+		container, _ := getSidecarContainer(annotations, "app_id", "darpio/dapr", "Always", "dapr-system", "controlplane:9000", "placement:50000", nil, "", "", "", "sentry:50000", true, "pod_identity")
 
-	container, _ := getSidecarContainer(annotations, "app_id", "darpio/dapr", "Always", "dapr-system", "controlplane:9000", "placement:50000", nil, "", "", "", "sentry:50000", true, "pod_identity")
+		expectedArgs := []string{
+			"--mode", "kubernetes",
+			"--dapr-http-port", "3500",
+			"--dapr-grpc-port", "50001",
+			"--dapr-internal-grpc-port", "50002",
+			"--dapr-listen-address", "localhost",
+			"--app-port", "5000",
+			"--app-id", "app_id",
+			"--control-plane-address", "controlplane:9000",
+			"--app-protocol", "http",
+			"--placement-host-address", "placement:50000",
+			"--config", "config",
+			"--log-level", "info",
+			"--app-max-concurrency", "-1",
+			"--sentry-address", "sentry:50000",
+			"--enable-metrics=true",
+			"--metrics-port", "9090",
+			"--dapr-http-max-request-size", "-1",
+			"--log-as-json",
+		}
 
-	expectedArgs := []string{
-		"--mode", "kubernetes",
-		"--dapr-http-port", "3500",
-		"--dapr-grpc-port", "50001",
-		"--dapr-internal-grpc-port", "50002",
-		"--app-port", "5000",
-		"--app-id", "app_id",
-		"--control-plane-address", "controlplane:9000",
-		"--app-protocol", "http",
-		"--placement-host-address", "placement:50000",
-		"--config", "config",
-		"--log-level", "info",
-		"--app-max-concurrency", "-1",
-		"--sentry-address", "sentry:50000",
-		"--metrics-port", "9090",
-		"--dapr-http-max-request-size", "-1",
-		"--log-as-json",
-	}
+		// NAMESPACE
+		assert.Equal(t, "dapr-system", container.Env[0].Value)
+		// DAPR_API_TOKEN
+		assert.Equal(t, "secret", container.Env[1].ValueFrom.SecretKeyRef.Name)
+		// DAPR_APP_TOKEN
+		assert.Equal(t, "appsecret", container.Env[2].ValueFrom.SecretKeyRef.Name)
+		assert.EqualValues(t, expectedArgs, container.Args)
+		assert.Equal(t, corev1.PullAlways, container.ImagePullPolicy)
+	})
 
-	// DAPR_HOST_IP
-	assert.Equal(t, "", container.Env[0].Value)
-	// NAMESPACE
-	assert.Equal(t, "dapr-system", container.Env[1].Value)
-	// DAPR_API_TOKEN
-	assert.Equal(t, "secret", container.Env[2].ValueFrom.SecretKeyRef.Name)
-	// DAPR_APP_TOKEN
-	assert.Equal(t, "appsecret", container.Env[3].ValueFrom.SecretKeyRef.Name)
-	assert.EqualValues(t, expectedArgs, container.Args)
-	assert.Equal(t, corev1.PullAlways, container.ImagePullPolicy)
+	t.Run("get sidecar container with debugging", func(t *testing.T) {
+		annotations := map[string]string{}
+		annotations[daprConfigKey] = "config"
+		annotations[daprAppPortKey] = "5000"
+		annotations[daprLogAsJSON] = trueString
+		annotations[daprAPITokenSecret] = "secret"
+		annotations[daprAppTokenSecret] = "appsecret"
+		annotations[daprEnableDebugKey] = trueString
+		annotations[daprDebugPortKey] = "55555"
+		container, _ := getSidecarContainer(annotations, "app_id", "darpio/dapr", "Always", "dapr-system", "controlplane:9000", "placement:50000", nil, "", "", "", "sentry:50000", true, "pod_identity")
+
+		expectedArgs := []string{
+			"--listen=:55555",
+			"--accept-multiclient",
+			"--headless=true",
+			"--log",
+			"--api-version=2",
+			"exec",
+			"/daprd",
+			"--",
+			"--mode", "kubernetes",
+			"--dapr-http-port", "3500",
+			"--dapr-grpc-port", "50001",
+			"--dapr-internal-grpc-port", "50002",
+			"--dapr-listen-address", "localhost",
+			"--app-port", "5000",
+			"--app-id", "app_id",
+			"--control-plane-address", "controlplane:9000",
+			"--app-protocol", "http",
+			"--placement-host-address", "placement:50000",
+			"--config", "config",
+			"--log-level", "info",
+			"--app-max-concurrency", "-1",
+			"--sentry-address", "sentry:50000",
+			"--enable-metrics=true",
+			"--metrics-port", "9090",
+			"--dapr-http-max-request-size", "-1",
+			"--log-as-json",
+		}
+
+		assert.Equal(t, "/dlv", container.Command[0])
+		// NAMESPACE
+		assert.Equal(t, "dapr-system", container.Env[0].Value)
+		// DAPR_API_TOKEN
+		assert.Equal(t, "secret", container.Env[1].ValueFrom.SecretKeyRef.Name)
+		// DAPR_APP_TOKEN
+		assert.Equal(t, "appsecret", container.Env[2].ValueFrom.SecretKeyRef.Name)
+		assert.EqualValues(t, expectedArgs, container.Args)
+		assert.Equal(t, corev1.PullAlways, container.ImagePullPolicy)
+	})
+	t.Run("get sidecar container override listen address", func(t *testing.T) {
+		annotations := map[string]string{}
+		annotations[daprConfigKey] = "config"
+		annotations[daprListenAddress] = "1.2.3.4"
+		container, _ := getSidecarContainer(annotations, "app_id", "darpio/dapr", "Always", "dapr-system", "controlplane:9000", "placement:50000", nil, "", "", "", "sentry:50000", true, "pod_identity")
+
+		expectedArgs := []string{
+			"--mode", "kubernetes",
+			"--dapr-http-port", "3500",
+			"--dapr-grpc-port", "50001",
+			"--dapr-internal-grpc-port", "50002",
+			"--dapr-listen-address", "1.2.3.4",
+			"--app-port", "",
+			"--app-id", "app_id",
+			"--control-plane-address", "controlplane:9000",
+			"--app-protocol", "http",
+			"--placement-host-address", "placement:50000",
+			"--config", "config",
+			"--log-level", "info",
+			"--app-max-concurrency", "-1",
+			"--sentry-address", "sentry:50000",
+			"--enable-metrics=true",
+			"--metrics-port", "9090",
+			"--dapr-http-max-request-size", "-1",
+		}
+
+		assert.EqualValues(t, expectedArgs, container.Args)
+	})
 }
 
 func TestImagePullPolicy(t *testing.T) {

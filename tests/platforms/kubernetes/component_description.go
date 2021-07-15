@@ -1,11 +1,11 @@
 // ------------------------------------------------------------
-// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
 // Licensed under the MIT License.
 // ------------------------------------------------------------
 
 package kubernetes
 
-// ComponentDescription holds dapr component description
+// ComponentDescription holds dapr component description.
 type ComponentDescription struct {
 	// Name is the name of dapr component
 	Name string

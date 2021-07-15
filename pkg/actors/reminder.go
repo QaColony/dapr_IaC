@@ -1,11 +1,11 @@
 // ------------------------------------------------------------
-// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
 // Licensed under the MIT License.
 // ------------------------------------------------------------
 
 package actors
 
-// Reminder represents a persisted reminder for a unique actor
+// Reminder represents a persisted reminder for a unique actor.
 type Reminder struct {
 	ActorID        string      `json:"actorID,omitempty"`
 	ActorType      string      `json:"actorType,omitempty"`

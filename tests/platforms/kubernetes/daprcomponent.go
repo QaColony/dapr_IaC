@@ -1,24 +1,25 @@
 // ------------------------------------------------------------
-// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
 // Licensed under the MIT License.
 // ------------------------------------------------------------
 
 package kubernetes
 
 import (
-	v1alpha1 "github.com/dapr/dapr/pkg/apis/components/v1alpha1"
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	v1alpha1 "github.com/dapr/dapr/pkg/apis/components/v1alpha1"
 )
 
-// DaprComponent holds kubernetes client and component information
+// DaprComponent holds kubernetes client and component information.
 type DaprComponent struct {
 	namespace  string
 	kubeClient *KubeClient
 	component  ComponentDescription
 }
 
-// NewDaprComponent creates DaprComponent instance
+// NewDaprComponent creates DaprComponent instance.
 func NewDaprComponent(client *KubeClient, ns string, comp ComponentDescription) *DaprComponent {
 	return &DaprComponent{
 		namespace:  ns,

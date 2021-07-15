@@ -1,5 +1,5 @@
 // ------------------------------------------------------------
-// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
 // Licensed under the MIT License.
 // ------------------------------------------------------------
 
@@ -11,6 +11,7 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/dapr/components-contrib/bindings"
+
 	"github.com/dapr/dapr/pkg/components"
 )
 
@@ -27,7 +28,7 @@ type (
 		FactoryMethod func() bindings.OutputBinding
 	}
 
-	// Registry is the interface of a components that allows callers to get registered instances of input and output bindings
+	// Registry is the interface of a components that allows callers to get registered instances of input and output bindings.
 	Registry interface {
 		RegisterInputBindings(components ...InputBinding)
 		RegisterOutputBindings(components ...OutputBinding)
@@ -116,8 +117,7 @@ func (b *bindingsRegistry) getInputBinding(name, version string) (func() binding
 	if ok {
 		return bindingFn, true
 	}
-	switch versionLower {
-	case "", "v0", "v1":
+	if components.IsInitialVersion(versionLower) {
 		bindingFn, ok = b.inputBindings[nameLower]
 	}
 	return bindingFn, ok

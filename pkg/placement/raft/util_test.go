@@ -1,5 +1,5 @@
 // ------------------------------------------------------------
-// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
 // Licensed under the MIT License.
 // ------------------------------------------------------------
 
@@ -45,7 +45,7 @@ func TestEnsureDir(t *testing.T) {
 }
 
 func TestRaftAddressForID(t *testing.T) {
-	var raftAddressTests = []struct {
+	raftAddressTests := []struct {
 		in  []PeerInfo
 		id  string
 		out string

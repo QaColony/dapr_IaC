@@ -1,5 +1,5 @@
 // ------------------------------------------------------------
-// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
 // Licensed under the MIT License.
 // ------------------------------------------------------------
 
@@ -13,11 +13,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dapr/dapr/pkg/config"
-	diag_utils "github.com/dapr/dapr/pkg/diagnostics/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/valyala/fasthttp"
 	"go.opencensus.io/trace"
+
+	"github.com/dapr/dapr/pkg/config"
+	diag_utils "github.com/dapr/dapr/pkg/diagnostics/utils"
 )
 
 func TestSpanContextFromRequest(t *testing.T) {
@@ -124,7 +125,7 @@ func TestSpanContextToHTTPHeaders(t *testing.T) {
 }
 
 func TestGetAPIComponent(t *testing.T) {
-	var tests = []struct {
+	tests := []struct {
 		path    string
 		version string
 		api     string
@@ -150,7 +151,7 @@ func TestGetAPIComponent(t *testing.T) {
 }
 
 func TestGetSpanAttributesMapFromHTTPContext(t *testing.T) {
-	var tests = []struct {
+	tests := []struct {
 		path string
 		out  map[string]string
 	}{

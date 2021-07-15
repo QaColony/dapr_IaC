@@ -1,7 +1,7 @@
 // +build e2e
 
 // ------------------------------------------------------------
-// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
 // Licensed under the MIT License.
 // ------------------------------------------------------------
 
@@ -379,6 +379,7 @@ func TestMain(m *testing.M) {
 			ImageName:      "e2e-stateapp",
 			Replicas:       1,
 			IngressEnabled: true,
+			MetricsEnabled: true,
 		},
 	}
 

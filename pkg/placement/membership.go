@@ -1,5 +1,5 @@
 // ------------------------------------------------------------
-// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
 // Licensed under the MIT License.
 // ------------------------------------------------------------
 
@@ -9,10 +9,11 @@ import (
 	"sync"
 	"time"
 
+	"google.golang.org/grpc/peer"
+
 	"github.com/dapr/dapr/pkg/placement/monitoring"
 	"github.com/dapr/dapr/pkg/placement/raft"
 	v1pb "github.com/dapr/dapr/pkg/proto/placement/v1"
-	"google.golang.org/grpc/peer"
 )
 
 const (
@@ -223,6 +224,10 @@ func (p *Service) processRaftStateCommand(stopCh chan struct{}) {
 				// until the state is consistent.
 				logApplyConcurrency <- struct{}{}
 				go func() {
+					// We lock dissemination to ensure the updates can complete before the table is disseminated.
+					p.disseminateLock.Lock()
+					defer p.disseminateLock.Unlock()
+
 					updated, raftErr := p.raftNode.ApplyCommand(op.cmdType, op.host)
 					if raftErr != nil {
 						log.Errorf("fail to apply command: %v", raftErr)
@@ -244,31 +249,38 @@ func (p *Service) processRaftStateCommand(stopCh chan struct{}) {
 				}()
 
 			case raft.TableDisseminate:
-				// TableDissminate will be triggered by disseminateTimer.
+				// TableDisseminate will be triggered by disseminateTimer.
 				// This disseminates the latest consistent hashing tables to Dapr runtime.
-				nStreamConnPool := len(p.streamConnPool)
-				nTargetConns := len(p.raftNode.FSM().State().Members)
-
-				monitoring.RecordRuntimesCount(nStreamConnPool)
-				monitoring.RecordActorRuntimesCount(nTargetConns)
-
-				// ignore dissemination if there is no member update.
-				if cnt := p.memberUpdateCount.Load(); cnt > 0 {
-					state := p.raftNode.FSM().PlacementState()
-					log.Infof(
-						"Start desseminating tables. memberUpdateCount: %d, streams: %d, targets: %d, table generation: %s",
-						cnt, nStreamConnPool, nTargetConns, state.Version)
-					p.performTablesUpdate(p.streamConnPool, state)
-					log.Infof(
-						"Completed dessemination. memberUpdateCount: %d, streams: %d, targets: %d, table generation: %s",
-						cnt, nStreamConnPool, nTargetConns, state.Version)
-					p.memberUpdateCount.Store(0)
-
-					// set faultyHostDetectDuration to the default duration.
-					p.faultyHostDetectDuration = faultyHostDetectDefaultDuration
-				}
+				p.performTableDissemination()
 			}
 		}
+	}
+}
+
+func (p *Service) performTableDissemination() {
+	nStreamConnPool := len(p.streamConnPool)
+	nTargetConns := len(p.raftNode.FSM().State().Members)
+
+	monitoring.RecordRuntimesCount(nStreamConnPool)
+	monitoring.RecordActorRuntimesCount(nTargetConns)
+
+	// ignore dissemination if there is no member update.
+	if cnt := p.memberUpdateCount.Load(); cnt > 0 {
+		p.disseminateLock.Lock()
+		defer p.disseminateLock.Unlock()
+
+		state := p.raftNode.FSM().PlacementState()
+		log.Infof(
+			"Start disseminating tables. memberUpdateCount: %d, streams: %d, targets: %d, table generation: %s",
+			cnt, nStreamConnPool, nTargetConns, state.Version)
+		p.performTablesUpdate(p.streamConnPool, state)
+		log.Infof(
+			"Completed dissemination. memberUpdateCount: %d, streams: %d, targets: %d, table generation: %s",
+			cnt, nStreamConnPool, nTargetConns, state.Version)
+		p.memberUpdateCount.Store(0)
+
+		// set faultyHostDetectDuration to the default duration.
+		p.faultyHostDetectDuration = faultyHostDetectDefaultDuration
 	}
 }
 
@@ -277,9 +289,6 @@ func (p *Service) processRaftStateCommand(stopCh chan struct{}) {
 // in runtime, it proceeds to update new table to Dapr runtimes and then unlock
 // once all runtimes have been updated.
 func (p *Service) performTablesUpdate(hosts []placementGRPCStream, newTable *v1pb.PlacementTables) {
-	p.disseminateLock.Lock()
-	defer p.disseminateLock.Unlock()
-
 	// TODO: error from disseminationOperation needs to be handle properly.
 	// Otherwise, each Dapr runtime will have inconsistent hashing table.
 	p.disseminateOperation(hosts, "lock", nil)
@@ -305,7 +314,7 @@ func (p *Service) disseminateOperation(targets []placementGRPCStream, operation 
 
 			log.Errorf("error updating runtime host (%q) on %q operation: %s", remoteAddr, operation, err)
 			// TODO: the error should not be ignored. By handing error or retrying dissemination,
-			// this logic needs to be improved. Otherwise, the runtimes throwing the exeception
+			// this logic needs to be improved. Otherwise, the runtimes throwing the exception
 			// will have the inconsistent hashing tables.
 		}
 	}

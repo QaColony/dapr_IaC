@@ -1,5 +1,5 @@
 // ------------------------------------------------------------
-// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
 // Licensed under the MIT License.
 // ------------------------------------------------------------
 
@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	b "github.com/dapr/components-contrib/bindings"
+
 	"github.com/dapr/dapr/pkg/components/bindings"
 )
 

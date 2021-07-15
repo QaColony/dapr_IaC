@@ -1,5 +1,5 @@
 // ------------------------------------------------------------
-// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
 // Licensed under the MIT License.
 // ------------------------------------------------------------
 
@@ -8,8 +8,10 @@ package state
 import (
 	"strings"
 
-	"github.com/dapr/components-contrib/state"
 	"github.com/pkg/errors"
+
+	"github.com/dapr/components-contrib/state"
+	"github.com/dapr/dapr/pkg/components"
 )
 
 type State struct {
@@ -24,7 +26,7 @@ func New(name string, factoryMethod func() state.Store) State {
 	}
 }
 
-// Registry is an interface for a component that returns registered state store implementations
+// Registry is an interface for a component that returns registered state store implementations.
 type Registry interface {
 	Register(components ...State)
 	Create(name, version string) (state.Store, error)
@@ -50,21 +52,20 @@ func (s *stateStoreRegistry) Register(components ...State) {
 }
 
 func (s *stateStoreRegistry) Create(name, version string) (state.Store, error) {
-	if method, ok := s.getSecretStore(name, version); ok {
+	if method, ok := s.getStateStore(name, version); ok {
 		return method(), nil
 	}
 	return nil, errors.Errorf("couldn't find state store %s/%s", name, version)
 }
 
-func (s *stateStoreRegistry) getSecretStore(name, version string) (func() state.Store, bool) {
+func (s *stateStoreRegistry) getStateStore(name, version string) (func() state.Store, bool) {
 	nameLower := strings.ToLower(name)
 	versionLower := strings.ToLower(version)
 	stateStoreFn, ok := s.stateStores[nameLower+"/"+versionLower]
 	if ok {
 		return stateStoreFn, true
 	}
-	switch versionLower {
-	case "", "v0", "v1":
+	if components.IsInitialVersion(versionLower) {
 		stateStoreFn, ok = s.stateStores[nameLower]
 	}
 	return stateStoreFn, ok

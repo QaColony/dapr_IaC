@@ -1,7 +1,7 @@
 // +build e2e
 
 // ------------------------------------------------------------
-// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
 // Licensed under the MIT License.
 // ------------------------------------------------------------
 
@@ -27,7 +27,7 @@ const (
 
 type actorCallRequest struct {
 	ActorType       string `json:"actorType"`
-	ActorId         string `json:"actorId"`
+	ActorID         string `json:"actorId"`
 	Method          string `json:"method"`
 	RemoteActorID   string `json:"remoteId,omitempty"`
 	RemoteActorType string `json:"remoteType,omitempty"`
@@ -56,6 +56,7 @@ func TestMain(m *testing.M) {
 			ImageName:      "e2e-actorinvocationapp",
 			Replicas:       1,
 			IngressEnabled: true,
+			MetricsEnabled: true,
 		},
 		{
 			AppName:        "actor2",
@@ -63,6 +64,7 @@ func TestMain(m *testing.M) {
 			ImageName:      "e2e-actorinvocationapp",
 			Replicas:       1,
 			IngressEnabled: true,
+			MetricsEnabled: true,
 		},
 	}
 
@@ -83,7 +85,7 @@ func TestActorInvocation(t *testing.T) {
 	t.Run("Actor remote invocation", func(t *testing.T) {
 		request := actorCallRequest{
 			ActorType: "actor1",
-			ActorId:   "10",
+			ActorID:   "10",
 			Method:    "logCall",
 		}
 
@@ -95,7 +97,7 @@ func TestActorInvocation(t *testing.T) {
 
 		request = actorCallRequest{
 			ActorType: "actor2",
-			ActorId:   "20",
+			ActorID:   "20",
 			Method:    "logCall",
 		}
 
@@ -110,7 +112,7 @@ func TestActorInvocation(t *testing.T) {
 		// Register the 2nd actor on the same pod.
 		request := actorCallRequest{
 			ActorType: "actor1",
-			ActorId:   "11",
+			ActorID:   "11",
 			Method:    "logCall",
 		}
 
@@ -122,7 +124,7 @@ func TestActorInvocation(t *testing.T) {
 
 		request = actorCallRequest{
 			ActorType:       "actor1",
-			ActorId:         "10",
+			ActorID:         "10",
 			Method:          "callDifferentActor",
 			RemoteActorID:   "11",
 			RemoteActorType: "actor1",
@@ -139,7 +141,7 @@ func TestActorInvocation(t *testing.T) {
 		// Register the 2nd actor on a different pod.
 		request := actorCallRequest{
 			ActorType: "actor2",
-			ActorId:   "21",
+			ActorID:   "21",
 			Method:    "logCall",
 		}
 
@@ -151,7 +153,7 @@ func TestActorInvocation(t *testing.T) {
 
 		request = actorCallRequest{
 			ActorType:       "actor1",
-			ActorId:         "10",
+			ActorID:         "10",
 			Method:          "callDifferentActor",
 			RemoteActorID:   "21",
 			RemoteActorType: "actor2",
@@ -175,7 +177,7 @@ func TestActorNegativeInvocation(t *testing.T) {
 	t.Run("Try actor call with non-bound method", func(t *testing.T) {
 		request := actorCallRequest{
 			ActorType: "actor1",
-			ActorId:   "10",
+			ActorID:   "10",
 			Method:    "notAMethod",
 		}
 
@@ -190,7 +192,7 @@ func TestActorNegativeInvocation(t *testing.T) {
 	t.Run("Try actor call with non-registered actor type", func(t *testing.T) {
 		request := actorCallRequest{
 			ActorType: "notAType",
-			ActorId:   "10",
+			ActorID:   "10",
 			Method:    "logCall",
 		}
 

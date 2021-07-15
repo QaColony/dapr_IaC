@@ -1,7 +1,7 @@
 // +build e2e
 
 // ------------------------------------------------------------
-// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
 // Licensed under the MIT License.
 // ------------------------------------------------------------
 
@@ -41,25 +41,40 @@ func TestMain(m *testing.M) {
 	// and will be cleaned up after all tests are finished automatically
 	testApps := []kube.AppDescription{
 		{
-			AppName:        "hellobluedapr",
-			DaprEnabled:    true,
-			ImageName:      "e2e-hellodapr",
-			Replicas:       1,
-			IngressEnabled: true,
+			AppName:           "hellobluedapr",
+			DaprEnabled:       true,
+			ImageName:         "e2e-hellodapr",
+			Replicas:          1,
+			IngressEnabled:    true,
+			MetricsEnabled:    true,
+			DaprMemoryLimit:   "200Mi",
+			DaprMemoryRequest: "100Mi",
+			AppMemoryLimit:    "200Mi",
+			AppMemoryRequest:  "100Mi",
 		},
 		{
-			AppName:        "hellogreendapr",
-			DaprEnabled:    true,
-			ImageName:      "e2e-hellodapr",
-			Replicas:       1,
-			IngressEnabled: true,
+			AppName:           "hellogreendapr",
+			DaprEnabled:       true,
+			ImageName:         "e2e-hellodapr",
+			Replicas:          1,
+			IngressEnabled:    true,
+			MetricsEnabled:    true,
+			DaprMemoryLimit:   "200Mi",
+			DaprMemoryRequest: "100Mi",
+			AppMemoryLimit:    "200Mi",
+			AppMemoryRequest:  "100Mi",
 		},
 		{
-			AppName:        "helloenvtestdapr",
-			DaprEnabled:    true,
-			ImageName:      "e2e-hellodapr",
-			Replicas:       1,
-			IngressEnabled: true,
+			AppName:           "helloenvtestdapr",
+			DaprEnabled:       true,
+			ImageName:         "e2e-hellodapr",
+			Replicas:          1,
+			IngressEnabled:    true,
+			MetricsEnabled:    true,
+			DaprMemoryLimit:   "200Mi",
+			DaprMemoryRequest: "100Mi",
+			AppMemoryLimit:    "200Mi",
+			AppMemoryRequest:  "100Mi",
 		},
 	}
 

@@ -6,9 +6,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/dapr/dapr/pkg/logger"
-	"github.com/dapr/dapr/pkg/operator/monitoring"
-	"github.com/dapr/dapr/pkg/validation"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -18,11 +15,18 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
+
+	"github.com/dapr/kit/logger"
+
+	"github.com/dapr/dapr/pkg/operator/monitoring"
+	"github.com/dapr/dapr/pkg/validation"
 )
 
 const (
 	daprEnabledAnnotationKey        = "dapr.io/enabled"
 	appIDAnnotationKey              = "dapr.io/app-id"
+	daprEnableMetricsKey            = "dapr.io/enable-metrics"
 	daprMetricsPortKey              = "dapr.io/metrics-port"
 	daprSidecarHTTPPortName         = "dapr-http"
 	daprSidecarAPIGRPCPortName      = "dapr-grpc"
@@ -31,6 +35,7 @@ const (
 	daprSidecarHTTPPort             = 3500
 	daprSidecarAPIGRPCPort          = 50001
 	daprSidecarInternalGRPCPort     = 50002
+	defaultMetricsEnabled           = true
 	defaultMetricsPort              = 9090
 	clusterIPNone                   = "None"
 	daprServiceOwnerField           = ".metadata.controller"
@@ -38,7 +43,7 @@ const (
 
 var log = logger.NewLogger("dapr.operator.handlers")
 
-// DaprHandler handles the lifetime for Dapr CRDs
+// DaprHandler handles the lifetime for Dapr CRDs.
 type DaprHandler struct {
 	mgr ctrl.Manager
 
@@ -46,7 +51,7 @@ type DaprHandler struct {
 	Scheme *runtime.Scheme
 }
 
-// NewDaprHandler returns a new Dapr handler
+// NewDaprHandler returns a new Dapr handler.
 func NewDaprHandler(mgr ctrl.Manager) *DaprHandler {
 	return &DaprHandler{
 		mgr: mgr,
@@ -56,7 +61,7 @@ func NewDaprHandler(mgr ctrl.Manager) *DaprHandler {
 	}
 }
 
-// Init allows for various startup tasks
+// Init allows for various startup tasks.
 func (h *DaprHandler) Init() error {
 	if err := h.mgr.GetFieldIndexer().IndexField(
 		context.TODO(),
@@ -74,6 +79,9 @@ func (h *DaprHandler) Init() error {
 	return ctrl.NewControllerManagedBy(h.mgr).
 		For(&appsv1.Deployment{}).
 		Owns(&corev1.Service{}).
+		WithOptions(controller.Options{
+			MaxConcurrentReconciles: 100,
+		}).
 		Complete(h)
 }
 
@@ -104,11 +112,8 @@ func (h *DaprHandler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Res
 		if err := h.ensureDaprServicePresent(ctx, req.Namespace, &deployment); err != nil {
 			return ctrl.Result{Requeue: true}, err
 		}
-	} else {
-		if err := h.ensureDaprServiceAbsent(ctx, req.NamespacedName); err != nil {
-			return ctrl.Result{Requeue: true}, err
-		}
 	}
+
 	return ctrl.Result{}, nil
 }
 
@@ -137,19 +142,41 @@ func (h *DaprHandler) ensureDaprServicePresent(ctx context.Context, namespace st
 
 func (h *DaprHandler) createDaprService(ctx context.Context, expectedService types.NamespacedName, deployment *appsv1.Deployment) error {
 	appID := h.getAppID(deployment)
-	metricsPort := h.getMetricsPort(deployment)
+	service := h.createDaprServiceValues(ctx, expectedService, deployment, appID)
 
-	service := &corev1.Service{
+	if err := ctrl.SetControllerReference(deployment, service, h.Scheme); err != nil {
+		return err
+	}
+	if err := h.Create(ctx, service); err != nil {
+		log.Errorf("unable to create Dapr service for deployment, service: %s, err: %s", expectedService, err)
+		return err
+	}
+	log.Debugf("created service: %s", expectedService)
+	monitoring.RecordServiceCreatedCount(appID)
+	return nil
+}
+
+func (h *DaprHandler) createDaprServiceValues(ctx context.Context, expectedService types.NamespacedName, deployment *appsv1.Deployment, appID string) *corev1.Service {
+	enableMetrics := h.getEnableMetrics(deployment)
+	metricsPort := h.getMetricsPort(deployment)
+	fmt.Println("enableMetrics", enableMetrics)
+
+	annotations := map[string]string{
+		appIDAnnotationKey: appID,
+	}
+
+	if enableMetrics {
+		annotations["prometheus.io/scrape"] = "true"
+		annotations["prometheus.io/port"] = strconv.Itoa(metricsPort)
+		annotations["prometheus.io/path"] = "/"
+	}
+
+	return &corev1.Service{
 		ObjectMeta: meta_v1.ObjectMeta{
-			Name:      expectedService.Name,
-			Namespace: expectedService.Namespace,
-			Labels:    map[string]string{daprEnabledAnnotationKey: "true"},
-			Annotations: map[string]string{
-				"prometheus.io/scrape": "true",
-				"prometheus.io/port":   strconv.Itoa(metricsPort),
-				"prometheus.io/path":   "/",
-				appIDAnnotationKey:     appID,
-			},
+			Name:        expectedService.Name,
+			Namespace:   expectedService.Namespace,
+			Labels:      map[string]string{daprEnabledAnnotationKey: "true"},
+			Annotations: annotations,
 		},
 		Spec: corev1.ServiceSpec{
 			Selector:  deployment.Spec.Selector.MatchLabels,
@@ -166,7 +193,8 @@ func (h *DaprHandler) createDaprService(ctx context.Context, expectedService typ
 					Port:       int32(daprSidecarAPIGRPCPort),
 					TargetPort: intstr.FromInt(daprSidecarAPIGRPCPort),
 					Name:       daprSidecarAPIGRPCPortName,
-				}, {
+				},
+				{
 					Protocol:   corev1.ProtocolTCP,
 					Port:       int32(daprSidecarInternalGRPCPort),
 					TargetPort: intstr.FromInt(daprSidecarInternalGRPCPort),
@@ -181,38 +209,6 @@ func (h *DaprHandler) createDaprService(ctx context.Context, expectedService typ
 			},
 		},
 	}
-	if err := ctrl.SetControllerReference(deployment, service, h.Scheme); err != nil {
-		return err
-	}
-	if err := h.Create(ctx, service); err != nil {
-		log.Errorf("unable to create Dapr service for deployment, service: %s, err: %s", expectedService, err)
-		return err
-	}
-	log.Debugf("created service: %s", expectedService)
-	monitoring.RecordServiceCreatedCount(appID)
-	return nil
-}
-
-func (h *DaprHandler) ensureDaprServiceAbsent(ctx context.Context, deploymentKey types.NamespacedName) error {
-	var services corev1.ServiceList
-	if err := h.List(ctx, &services,
-		client.InNamespace(deploymentKey.Namespace),
-		client.MatchingFields{daprServiceOwnerField: deploymentKey.Name}); err != nil {
-		log.Errorf("unable to list services, err: %s", err)
-		return err
-	}
-	for i := range services.Items {
-		svc := services.Items[i] // Make a copy since we will refer to this as a reference in this loop.
-		log.Debugf("deleting service: %s/%s", svc.Namespace, svc.Name)
-		if err := h.Delete(ctx, &svc, client.PropagationPolicy(meta_v1.DeletePropagationBackground)); client.IgnoreNotFound(err) != nil {
-			log.Errorf("unable to delete svc: %s/%s, err: %s", svc.Namespace, svc.Name, err)
-		} else {
-			log.Debugf("deleted service: %s/%s", svc.Namespace, svc.Name)
-			appID := svc.Annotations[appIDAnnotationKey]
-			monitoring.RecordServiceDeletedCount(appID)
-		}
-	}
-	return nil
 }
 
 func (h *DaprHandler) getAppID(deployment *appsv1.Deployment) string {
@@ -235,6 +231,18 @@ func (h *DaprHandler) isAnnotatedForDapr(deployment *appsv1.Deployment) bool {
 	default:
 		return false
 	}
+}
+
+func (h *DaprHandler) getEnableMetrics(deployment *appsv1.Deployment) bool {
+	annotations := deployment.Spec.Template.ObjectMeta.Annotations
+	enableMetrics := defaultMetricsEnabled
+	if val, ok := annotations[daprEnableMetricsKey]; ok {
+		fmt.Println(val)
+		if v, err := strconv.ParseBool(val); err == nil {
+			enableMetrics = v
+		}
+	}
+	return enableMetrics
 }
 
 func (h *DaprHandler) getMetricsPort(deployment *appsv1.Deployment) int {

@@ -1,5 +1,5 @@
 # ------------------------------------------------------------
-# Copyright (c) Microsoft Corporation.
+# Copyright (c) Microsoft Corporation and Dapr Contributors.
 # Licensed under the MIT License.
 # ------------------------------------------------------------
 
@@ -21,12 +21,13 @@ jobs:
     name: Build ${{ matrix.target_os }}_${{ matrix.target_arch }} binaries
     runs-on: ${{ matrix.os }}
     env:
-      GOVER: 1.15.3
+      GOVER: 1.16
       GOLANGCILINT_VER: v1.31
       GOOS: ${{ matrix.target_os }}
       GOARCH: ${{ matrix.target_arch }}
       GOPROXY: https://proxy.golang.org
       ARCHIVE_OUTDIR: dist/archives
+      TEST_OUTPUT_FILE_PREFIX: test_report
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macOS-latest]
@@ -66,6 +67,25 @@ jobs:
         uses: actions/checkout@v2
       - name: Parse release version and set REL_VERSION
         run: python ./.github/scripts/get_release_version.py
+      - name: Check white space in .md files
+        if: matrix.target_os == 'linux' && github.event_name == 'pull_request'
+        run: |
+          TRAILING_WHITESPACE=0
+          # only check changed docs in pr
+          for file in $(git diff --cached --name-only --diff-filter=ACRMTU $GITHUB_BASE_REF | grep "\.md"); do
+            if grep -r '[[:blank:]]$' "$1" > /dev/null; then
+              echo "trailing whitespace: ${1}" >&2
+              ERRORS=yes
+              ((TRAILING_WHITESPACE=TRAILING_WHITESPACE+1))
+            fi
+          done
+          if [[ -n "$ERRORS" ]]; then
+            echo >&2
+            echo "ERRORS found" >&2
+            echo "${TRAILING_WHITESPACE} files with trailing whitespace" >&2
+            echo >&2
+            exit 1
+          fi
       - name: golangci-lint
         if: matrix.target_arch == 'amd64' && matrix.target_os == 'linux'
         uses: golangci/golangci-lint-action@v2.2.1
@@ -74,6 +94,18 @@ jobs:
       - name: Run go mod tidy check diff
         if: matrix.target_arch == 'amd64' && matrix.target_os == 'linux'
         run: make modtidy check-diff
+      - name: Run gen-proto check diff
+        if: matrix.target_arch == 'amd64' && matrix.target_os == 'linux'
+        run: |
+          wget https://github.com/protocolbuffers/protobuf/releases/download/v3.14.0/protoc-3.14.0-linux-x86_64.zip
+          unzip protoc-3.14.0-linux-x86_64.zip -d protoc
+          sudo cp -r protoc/include/google/ /usr/local/include/
+          sudo chmod -R 755 /usr/local/include/google
+          sudo cp protoc/bin/protoc /usr/local/bin/
+          sudo chmod +x /usr/local/bin/protoc
+          rm -r protoc protoc-3.14.0-linux-x86_64.zip
+          make init-proto
+          make gen-proto check-proto-diff
       - name: Run make test
         env:
           COVERAGE_OPTS: "-coverprofile=coverage.txt -covermode=atomic"
@@ -106,6 +138,12 @@ jobs:
         run: |
           echo "Build docker image and push image..."
           make docker-push TARGET_OS=${{ matrix.target_os }} TARGET_ARCH=${{ matrix.target_arch }} DAPR_REGISTRY=${{ secrets.DOCKER_REGISTRY }} DAPR_TAG=${{ env.REL_VERSION }}
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@master
+        with:
+          name: ${{ matrix.target_os }}_${{ matrix.target_arch }}_test_unit.json
+          path: ${{ env.TEST_OUTPUT_FILE_PREFIX }}_unit.json
   publish:
     name: Publish docker image and binaries
     needs: build
@@ -186,7 +224,10 @@ jobs:
               tar xzvf $tgzfile -C $RELEASE_DIR
             done
           done
-
+      - name: generate checksum files
+        run: cd ${ARTIFACT_DIR} && for i in *; do sha256sum -b $i > "$i.sha256"; done && cd -
+      - name: lists artifacts
+        run: ls -l ${{ env.ARTIFACT_DIR }}
       - name: publish binaries to github
         if: startswith(github.ref, 'refs/tags/v')
         run: |
@@ -284,5 +325,14 @@ jobs:
             git config --global user.email "daprweb@microsoft.com"
             git config --global user.name "dapr-bot"
             git add --all
-            git commit -m "Release - $daprVersion"
-            git push
+
+            # Check if the dapr-${daprVersion}.tgz file is modified.
+            if git diff --name-only --staged | grep -q ${daprVersion}; then
+              # If it is, we update the Helm chart, since this is an intentional update.
+              git commit -m "Release - $daprVersion"
+              git push
+            else
+              # If not, this update was accidentally triggered by tagging a release before updating the Helm chart.
+              echo "::error::There is no change for ${daprVersion} Helm chart. Did you forget to update the chart version before tagging?"
+              exit -1
+            fi

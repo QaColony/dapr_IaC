@@ -1,5 +1,5 @@
 // ------------------------------------------------------------
-// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
 // Licensed under the MIT License.
 // ------------------------------------------------------------
 
@@ -23,4 +23,12 @@ func (_m *TransactionalStoreMock) Multi(request *state.TransactionalStateRequest
 	}
 
 	return r0
+}
+
+func (_m *TransactionalStoreMock) Features() []state.Feature {
+	return []state.Feature{state.FeatureTransactional}
+}
+
+func (_m *TransactionalStoreMock) Close() error {
+	return nil
 }

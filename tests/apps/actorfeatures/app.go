@@ -1,5 +1,5 @@
 // ------------------------------------------------------------
-// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
 // Licensed under the MIT License.
 // ------------------------------------------------------------
 
@@ -14,6 +14,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -21,17 +22,19 @@ import (
 )
 
 const (
-	appPort                 = 3000
-	daprV1URL               = "http://localhost:3500/v1.0"
-	actorMethodURLFormat    = daprV1URL + "/actors/%s/%s/%s/%s"
-	actorSaveStateURLFormat = daprV1URL + "/actors/%s/%s/state/"
-	actorGetStateURLFormat  = daprV1URL + "/actors/%s/%s/state/%s/"
-	registedActorType       = "testactorfeatures" // Actor type must be unique per test app.
-	actorIdleTimeout        = "1h"
-	actorScanInterval       = "30s"
-	drainOngoingCallTimeout = "30s"
-	drainRebalancedActors   = true
-	secondsToWaitInMethod   = 5
+	appPort                         = 3000
+	daprV1URL                       = "http://localhost:3500/v1.0"
+	actorMethodURLFormat            = daprV1URL + "/actors/%s/%s/%s/%s"
+	actorSaveStateURLFormat         = daprV1URL + "/actors/%s/%s/state/"
+	actorGetStateURLFormat          = daprV1URL + "/actors/%s/%s/state/%s/"
+	defaultActorType                = "testactorfeatures"                   // Actor type must be unique per test app.
+	actorTypeEnvName                = "TEST_APP_ACTOR_TYPE"                 // To set to change actor type.
+	actorRemindersPartitionsEnvName = "TEST_APP_ACTOR_REMINDERS_PARTITIONS" // To set actor type partition count.
+	actorIdleTimeout                = "1h"
+	actorScanInterval               = "30s"
+	drainOngoingCallTimeout         = "30s"
+	drainRebalancedActors           = true
+	secondsToWaitInMethod           = 5
 )
 
 type daprActor struct {
@@ -50,21 +53,15 @@ type actorLogEntry struct {
 }
 
 type daprConfig struct {
-	Entities                []string `json:"entities,omitempty"`
-	ActorIdleTimeout        string   `json:"actorIdleTimeout,omitempty"`
-	ActorScanInterval       string   `json:"actorScanInterval,omitempty"`
-	DrainOngoingCallTimeout string   `json:"drainOngoingCallTimeout,omitempty"`
-	DrainRebalancedActors   bool     `json:"drainRebalancedActors,omitempty"`
+	Entities                   []string `json:"entities,omitempty"`
+	ActorIdleTimeout           string   `json:"actorIdleTimeout,omitempty"`
+	ActorScanInterval          string   `json:"actorScanInterval,omitempty"`
+	DrainOngoingCallTimeout    string   `json:"drainOngoingCallTimeout,omitempty"`
+	DrainRebalancedActors      bool     `json:"drainRebalancedActors,omitempty"`
+	RemindersStoragePartitions int      `json:"remindersStoragePartitions,omitempty"`
 }
 
-var daprConfigResponse = daprConfig{
-	[]string{registedActorType},
-	actorIdleTimeout,
-	actorScanInterval,
-	drainOngoingCallTimeout,
-	drainRebalancedActors,
-}
-
+// response object from an actor invocation request
 type daprActorResponse struct {
 	Data     []byte            `json:"data"`
 	Metadata map[string]string `json:"metadata"`
@@ -105,14 +102,47 @@ type TempTransactionalDelete struct {
 
 var actorLogs = []actorLogEntry{}
 var actorLogsMutex = &sync.Mutex{}
-
+var registeredActorType = getActorType()
+var actorReminderPartitions = getActorRemindersPartitions()
 var actors sync.Map
+
+var daprConfigResponse = daprConfig{
+	[]string{getActorType()},
+	actorIdleTimeout,
+	actorScanInterval,
+	drainOngoingCallTimeout,
+	drainRebalancedActors,
+	actorReminderPartitions,
+}
 
 func resetLogs() {
 	actorLogsMutex.Lock()
 	defer actorLogsMutex.Unlock()
 
 	actorLogs = []actorLogEntry{}
+}
+
+func getActorType() string {
+	actorType := os.Getenv(actorTypeEnvName)
+	if actorType == "" {
+		return defaultActorType
+	}
+
+	return actorType
+}
+
+func getActorRemindersPartitions() int {
+	val := os.Getenv(actorRemindersPartitionsEnvName)
+	if val == "" {
+		return 0
+	}
+
+	n, err := strconv.Atoi(val)
+	if err != nil {
+		return 0
+	}
+
+	return n
 }
 
 func appendLog(actorType string, actorID string, action string, start int) {
@@ -156,7 +186,7 @@ func logsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func configHandler(w http.ResponseWriter, r *http.Request) {
-	log.Printf("Processing dapr request for %s", r.URL.RequestURI())
+	log.Printf("Processing dapr request for %s, responding with %v", r.URL.RequestURI(), daprConfigResponse)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -234,7 +264,7 @@ func deactivateActorHandler(w http.ResponseWriter, r *http.Request) {
 	actorType := mux.Vars(r)["actorType"]
 	id := mux.Vars(r)["id"]
 
-	if actorType != registedActorType {
+	if actorType != registeredActorType {
 		log.Printf("Unknown actor type: %s", actorType)
 		w.WriteHeader(http.StatusBadRequest)
 		return
@@ -266,22 +296,21 @@ func testCallActorHandler(w http.ResponseWriter, r *http.Request) {
 
 	url := fmt.Sprintf(actorMethodURLFormat, actorType, id, callType, method)
 
-	var req interface{}
+	var req timerReminderRequest
 	switch callType {
 	case "method":
 		// NO OP
 	case "timers":
-		req = timerReminderRequest{
-			Data:    "timerdata",
-			DueTime: "1s",
-			Period:  "1s",
-		}
+		fallthrough
 	case "reminders":
-		req = timerReminderRequest{
-			Data:    "reminderdata",
-			DueTime: "1s",
-			Period:  "1s",
+		body, err := ioutil.ReadAll(r.Body)
+		defer r.Body.Close()
+		if err != nil {
+			log.Printf("Could not get reminder request: %s", err.Error())
+			return
 		}
+
+		json.Unmarshal(body, &req)
 	}
 
 	body, err := httpCall(r.Method, url, req, 200)
@@ -387,9 +416,9 @@ func actorStateTest(testName string, w http.ResponseWriter, actorType string, id
 		}
 
 		if len(body) != 0 {
-			log.Println("expected 0 length reponse")
+			log.Println("expected 0 length response")
 			w.WriteHeader(http.StatusInternalServerError)
-			return errors.New("expected 0 length reponse")
+			return errors.New("expected 0 length response")
 		}
 
 		// query a non-existing actor.  This should return 400.
@@ -451,9 +480,9 @@ func actorStateTest(testName string, w http.ResponseWriter, actorType string, id
 		}
 
 		if len(body) != 0 {
-			log.Println("expected 0 length reponse")
+			log.Println("expected 0 length response")
 			w.WriteHeader(http.StatusInternalServerError)
-			return errors.New("expected 0 length reponse")
+			return errors.New("expected 0 length response")
 		}
 	} else {
 		return errors.New("actorStateTest() - unexpected option")
@@ -487,6 +516,12 @@ func httpCall(method string, url string, requestBody interface{}, expectedHTTPSt
 	defer res.Body.Close()
 
 	if res.StatusCode != expectedHTTPStatusCode {
+		errBody, err := ioutil.ReadAll(res.Body)
+		if err == nil {
+			t := fmt.Errorf("Expected http status %d, received %d, payload ='%s'", expectedHTTPStatusCode, res.StatusCode, string(errBody))
+			return nil, t
+		}
+
 		t := fmt.Errorf("Expected http status %d, received %d", expectedHTTPStatusCode, res.StatusCode)
 		return nil, t
 	}

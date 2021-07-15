@@ -1,5 +1,5 @@
 // ------------------------------------------------------------
-// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
 // Licensed under the MIT License.
 // ------------------------------------------------------------
 
@@ -12,15 +12,17 @@ import (
 	"sync"
 	"time"
 
-	dapr_credentials "github.com/dapr/dapr/pkg/credentials"
-	"github.com/dapr/dapr/pkg/logger"
-	"github.com/dapr/dapr/pkg/placement/raft"
-	placementv1pb "github.com/dapr/dapr/pkg/proto/placement/v1"
 	"github.com/google/go-cmp/cmp"
 	"go.uber.org/atomic"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"github.com/dapr/kit/logger"
+
+	dapr_credentials "github.com/dapr/dapr/pkg/credentials"
+	"github.com/dapr/dapr/pkg/placement/raft"
+	placementv1pb "github.com/dapr/dapr/pkg/proto/placement/v1"
 )
 
 var log = logger.NewLogger("dapr.placement")
@@ -92,11 +94,11 @@ type Service struct {
 	// faultyHostDetectDuration
 	faultyHostDetectDuration time.Duration
 
-	// hasLeadership incidicates the state for leadership.
+	// hasLeadership indicates the state for leadership.
 	hasLeadership bool
 
 	// streamConnGroup represents the number of stream connections.
-	// This waits until all stream connnections are drained when revoking leadership.
+	// This waits until all stream connections are drained when revoking leadership.
 	streamConnGroup sync.WaitGroup
 
 	// shutdownLock is the mutex to lock shutdown
@@ -251,7 +253,7 @@ func (p *Service) ReportDaprStatus(stream placementv1pb.Placement_ReportDaprStat
 	return status.Error(codes.FailedPrecondition, "only leader can serve the request")
 }
 
-// addStreamConn adds stream connection between runtime and placement to the dissemination pool
+// addStreamConn adds stream connection between runtime and placement to the dissemination pool.
 func (p *Service) addStreamConn(conn placementGRPCStream) {
 	p.streamConnPoolLock.Lock()
 	p.streamConnPool = append(p.streamConnPool, conn)

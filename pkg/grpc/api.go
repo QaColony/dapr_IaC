@@ -1,5 +1,5 @@
 // ------------------------------------------------------------
-// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
 // Licensed under the MIT License.
 // ------------------------------------------------------------
 
@@ -12,11 +12,20 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/PuerkitoBio/purell"
+	"github.com/golang/protobuf/ptypes/empty"
+	jsoniter "github.com/json-iterator/go"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/emptypb"
+
 	"github.com/dapr/components-contrib/bindings"
+	contrib_metadata "github.com/dapr/components-contrib/metadata"
 	"github.com/dapr/components-contrib/pubsub"
 	"github.com/dapr/components-contrib/secretstores"
 	"github.com/dapr/components-contrib/state"
+	"github.com/dapr/dapr/pkg/acl"
 	"github.com/dapr/dapr/pkg/actors"
 	components_v1alpha "github.com/dapr/dapr/pkg/apis/components/v1alpha1"
 	"github.com/dapr/dapr/pkg/channel"
@@ -32,13 +41,6 @@ import (
 	internalv1pb "github.com/dapr/dapr/pkg/proto/internals/v1"
 	runtimev1pb "github.com/dapr/dapr/pkg/proto/runtime/v1"
 	runtime_pubsub "github.com/dapr/dapr/pkg/runtime/pubsub"
-	"github.com/golang/protobuf/ptypes/empty"
-	jsoniter "github.com/json-iterator/go"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/metadata"
-	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 const (
@@ -77,26 +79,30 @@ type API interface {
 	GetMetadata(ctx context.Context, in *emptypb.Empty) (*runtimev1pb.GetMetadataResponse, error)
 	// Sets value in extended metadata of the sidecar
 	SetMetadata(ctx context.Context, in *runtimev1pb.SetMetadataRequest) (*emptypb.Empty, error)
+	// Shutdown the sidecar
+	Shutdown(ctx context.Context, in *emptypb.Empty) (*emptypb.Empty, error)
 }
 
 type api struct {
-	actor                 actors.Actors
-	directMessaging       messaging.DirectMessaging
-	appChannel            channel.AppChannel
-	stateStores           map[string]state.Store
-	secretStores          map[string]secretstores.SecretStore
-	secretsConfiguration  map[string]config.SecretsScope
-	pubsubAdapter         runtime_pubsub.Adapter
-	id                    string
-	sendToOutputBindingFn func(name string, req *bindings.InvokeRequest) (*bindings.InvokeResponse, error)
-	tracingSpec           config.TracingSpec
-	accessControlList     *config.AccessControlList
-	appProtocol           string
-	extendedMetadata      sync.Map
-	components            []components_v1alpha.Component
+	actor                    actors.Actors
+	directMessaging          messaging.DirectMessaging
+	appChannel               channel.AppChannel
+	stateStores              map[string]state.Store
+	transactionalStateStores map[string]state.TransactionalStore
+	secretStores             map[string]secretstores.SecretStore
+	secretsConfiguration     map[string]config.SecretsScope
+	pubsubAdapter            runtime_pubsub.Adapter
+	id                       string
+	sendToOutputBindingFn    func(name string, req *bindings.InvokeRequest) (*bindings.InvokeResponse, error)
+	tracingSpec              config.TracingSpec
+	accessControlList        *config.AccessControlList
+	appProtocol              string
+	extendedMetadata         sync.Map
+	components               []components_v1alpha.Component
+	shutdown                 func()
 }
 
-// NewAPI returns a new gRPC API
+// NewAPI returns a new gRPC API.
 func NewAPI(
 	appID string, appChannel channel.AppChannel,
 	stateStores map[string]state.Store,
@@ -109,20 +115,30 @@ func NewAPI(
 	tracingSpec config.TracingSpec,
 	accessControlList *config.AccessControlList,
 	appProtocol string,
-	components []components_v1alpha.Component) API {
+	getComponentsFn func() []components_v1alpha.Component,
+	shutdown func()) API {
+	transactionalStateStores := map[string]state.TransactionalStore{}
+	for key, store := range stateStores {
+		if state.FeatureTransactional.IsPresent(store.Features()) {
+			transactionalStateStores[key] = store.(state.TransactionalStore)
+		}
+	}
+
 	return &api{
-		directMessaging:       directMessaging,
-		actor:                 actor,
-		id:                    appID,
-		appChannel:            appChannel,
-		pubsubAdapter:         pubsubAdapter,
-		stateStores:           stateStores,
-		secretStores:          secretStores,
-		secretsConfiguration:  secretsConfiguration,
-		sendToOutputBindingFn: sendToOutputBindingFn,
-		tracingSpec:           tracingSpec,
-		accessControlList:     accessControlList,
-		appProtocol:           appProtocol,
+		directMessaging:          directMessaging,
+		actor:                    actor,
+		id:                       appID,
+		appChannel:               appChannel,
+		pubsubAdapter:            pubsubAdapter,
+		stateStores:              stateStores,
+		transactionalStateStores: transactionalStateStores,
+		secretStores:             secretStores,
+		secretsConfiguration:     secretsConfiguration,
+		sendToOutputBindingFn:    sendToOutputBindingFn,
+		tracingSpec:              tracingSpec,
+		accessControlList:        accessControlList,
+		appProtocol:              appProtocol,
+		shutdown:                 shutdown,
 	}
 }
 
@@ -148,7 +164,7 @@ func (a *api) CallLocal(ctx context.Context, in *internalv1pb.InternalInvokeRequ
 				httpVerb = httpExt.GetVerb()
 			}
 		}
-		callAllowed, errMsg := a.applyAccessControlPolicies(ctx, operation, httpVerb, a.appProtocol)
+		callAllowed, errMsg := acl.ApplyAccessControlPolicies(ctx, operation, httpVerb, a.appProtocol, a.accessControlList)
 
 		if !callAllowed {
 			return nil, status.Errorf(codes.PermissionDenied, errMsg)
@@ -156,7 +172,6 @@ func (a *api) CallLocal(ctx context.Context, in *internalv1pb.InternalInvokeRequ
 	}
 
 	resp, err := a.appChannel.InvokeMethod(ctx, req)
-
 	if err != nil {
 		err = status.Errorf(codes.Internal, messages.ErrChannelInvoke, err)
 		return nil, err
@@ -164,49 +179,7 @@ func (a *api) CallLocal(ctx context.Context, in *internalv1pb.InternalInvokeRequ
 	return resp.Proto(), err
 }
 
-func normalizeOperation(operation string) (string, error) {
-	s, err := purell.NormalizeURLString(operation, purell.FlagsUsuallySafeGreedy|purell.FlagRemoveDuplicateSlashes)
-	if err != nil {
-		return "", err
-	}
-	return s, nil
-}
-
-func (a *api) applyAccessControlPolicies(ctx context.Context, operation string, httpVerb commonv1pb.HTTPExtension_Verb, appProtocol string) (bool, string) {
-	// Apply access control list filter
-	spiffeID, err := config.GetAndParseSpiffeID(ctx)
-	if err != nil {
-		// Apply the default action
-		apiServerLogger.Debugf("error while reading spiffe id from client cert: %v. applying default global policy action", err.Error())
-	}
-	var appID, trustDomain, namespace string
-	if spiffeID != nil {
-		appID = spiffeID.AppID
-		namespace = spiffeID.Namespace
-		trustDomain = spiffeID.TrustDomain
-	}
-
-	operation, err = normalizeOperation(operation)
-	var errMessage string
-
-	if err != nil {
-		errMessage = fmt.Sprintf("error in method normalization: %s", err)
-		apiServerLogger.Debugf(errMessage)
-		return false, errMessage
-	}
-
-	action, actionPolicy := config.IsOperationAllowedByAccessControlPolicy(spiffeID, appID, operation, httpVerb, appProtocol, a.accessControlList)
-	emitACLMetrics(actionPolicy, appID, trustDomain, namespace, operation, httpVerb.String(), action)
-
-	if !action {
-		errMessage = fmt.Sprintf("access control policy has denied access to appid: %s operation: %s verb: %s", appID, operation, httpVerb)
-		apiServerLogger.Debugf(errMessage)
-	}
-
-	return action, errMessage
-}
-
-// CallActor invokes a virtual actor
+// CallActor invokes a virtual actor.
 func (a *api) CallActor(ctx context.Context, in *internalv1pb.InternalInvokeRequest) (*internalv1pb.InternalInvokeResponse, error) {
 	req, err := invokev1.InternalInvokeRequest(in)
 	if err != nil {
@@ -249,47 +222,57 @@ func (a *api) PublishEvent(ctx context.Context, in *runtimev1pb.PublishEventRequ
 		return &emptypb.Empty{}, err
 	}
 
-	body := []byte{}
-
-	if in.Data != nil {
-		body = in.Data
+	rawPayload, metaErr := contrib_metadata.IsRawPayload(in.Metadata)
+	if metaErr != nil {
+		err := status.Errorf(codes.InvalidArgument, messages.ErrMetadataGet, metaErr.Error())
+		apiServerLogger.Debug(err)
+		return &emptypb.Empty{}, err
 	}
 
 	span := diag_utils.SpanFromContext(ctx)
 	corID := diag.SpanContextToW3CString(span.SpanContext())
 
-	envelope, err := runtime_pubsub.NewCloudEvent(&runtime_pubsub.CloudEvent{
-		ID:              a.id,
-		Topic:           in.Topic,
-		DataContentType: in.DataContentType,
-		Data:            body,
-		TraceID:         corID,
-		Pubsub:          in.PubsubName,
-	})
-	if err != nil {
-		err = status.Errorf(codes.InvalidArgument, messages.ErrPubsubCloudEventCreation, err.Error())
-		apiServerLogger.Debug(err)
-		return &emptypb.Empty{}, err
+	body := []byte{}
+	if in.Data != nil {
+		body = in.Data
 	}
 
-	features := thepubsub.Features()
-	pubsub.ApplyMetadata(envelope, features, in.Metadata)
+	data := body
 
-	b, err := jsoniter.ConfigFastest.Marshal(envelope)
-	if err != nil {
-		err = status.Errorf(codes.InvalidArgument, messages.ErrPubsubCloudEventsSer, topic, pubsubName, err.Error())
-		apiServerLogger.Debug(err)
-		return &emptypb.Empty{}, err
+	if !rawPayload {
+		envelope, err := runtime_pubsub.NewCloudEvent(&runtime_pubsub.CloudEvent{
+			ID:              a.id,
+			Topic:           in.Topic,
+			DataContentType: in.DataContentType,
+			Data:            body,
+			TraceID:         corID,
+			Pubsub:          in.PubsubName,
+		})
+		if err != nil {
+			err = status.Errorf(codes.InvalidArgument, messages.ErrPubsubCloudEventCreation, err.Error())
+			apiServerLogger.Debug(err)
+			return &emptypb.Empty{}, err
+		}
+
+		features := thepubsub.Features()
+		pubsub.ApplyMetadata(envelope, features, in.Metadata)
+
+		data, err = jsoniter.ConfigFastest.Marshal(envelope)
+		if err != nil {
+			err = status.Errorf(codes.InvalidArgument, messages.ErrPubsubCloudEventsSer, topic, pubsubName, err.Error())
+			apiServerLogger.Debug(err)
+			return &emptypb.Empty{}, err
+		}
 	}
 
 	req := pubsub.PublishRequest{
 		PubsubName: pubsubName,
 		Topic:      topic,
-		Data:       b,
+		Data:       data,
 		Metadata:   in.Metadata,
 	}
 
-	err = a.pubsubAdapter.Publish(&req)
+	err := a.pubsubAdapter.Publish(&req)
 	if err != nil {
 		nerr := status.Errorf(codes.Internal, messages.ErrPubsubPublishMessage, topic, pubsubName, err.Error())
 		if errors.As(err, &runtime_pubsub.NotAllowedError{}) {
@@ -322,11 +305,11 @@ func (a *api) InvokeService(ctx context.Context, in *runtimev1pb.InvokeServiceRe
 		return nil, err
 	}
 
-	var headerMD = invokev1.InternalMetadataToGrpcMetadata(ctx, resp.Headers(), true)
+	headerMD := invokev1.InternalMetadataToGrpcMetadata(ctx, resp.Headers(), true)
 
 	var respError error
 	if resp.IsHTTPResponse() {
-		var errorMessage = []byte("")
+		errorMessage := []byte("")
 		if resp != nil {
 			_, errorMessage = resp.RawData()
 		}
@@ -383,8 +366,12 @@ func (a *api) GetBulkState(ctx context.Context, in *runtimev1pb.GetBulkStateRequ
 	// try bulk get first
 	reqs := make([]state.GetRequest, len(in.Keys))
 	for i, k := range in.Keys {
+		key, err1 := state_loader.GetModifiedStateKey(k, in.StoreName, a.id)
+		if err1 != nil {
+			return &runtimev1pb.GetBulkStateResponse{}, err1
+		}
 		r := state.GetRequest{
-			Key:      state_loader.GetModifiedStateKey(k, in.StoreName, a.id),
+			Key:      key,
 			Metadata: in.Metadata,
 		}
 		reqs[i] = r
@@ -399,7 +386,7 @@ func (a *api) GetBulkState(ctx context.Context, in *runtimev1pb.GetBulkStateRequ
 			item := &runtimev1pb.BulkStateItem{
 				Key:      state_loader.GetOriginalStateKey(responses[i].Key),
 				Data:     responses[i].Data,
-				Etag:     responses[i].ETag,
+				Etag:     stringValueOrEmpty(responses[i].ETag),
 				Metadata: responses[i].Metadata,
 				Error:    responses[i].Error,
 			}
@@ -410,7 +397,9 @@ func (a *api) GetBulkState(ctx context.Context, in *runtimev1pb.GetBulkStateRequ
 
 	// if store doesn't support bulk get, fallback to call get() method one by one
 	limiter := concurrency.NewLimiter(int(in.Parallelism))
-	for i := 0; i < len(reqs); i++ {
+	n := len(reqs)
+	resultCh := make(chan *runtimev1pb.BulkStateItem, n)
+	for i := 0; i < n; i++ {
 		fn := func(param interface{}) {
 			req := param.(*state.GetRequest)
 			r, err := store.Get(req)
@@ -421,15 +410,20 @@ func (a *api) GetBulkState(ctx context.Context, in *runtimev1pb.GetBulkStateRequ
 				item.Error = err.Error()
 			} else if r != nil {
 				item.Data = r.Data
-				item.Etag = r.ETag
+				item.Etag = stringValueOrEmpty(r.ETag)
 				item.Metadata = r.Metadata
 			}
-			bulkResp.Items = append(bulkResp.Items, item)
+			resultCh <- item
 		}
 		limiter.Execute(fn, &reqs[i])
 	}
 	limiter.Wait()
-
+	// collect result
+	resultLen := len(resultCh)
+	for i := 0; i < resultLen; i++ {
+		item := <-resultCh
+		bulkResp.Items = append(bulkResp.Items, item)
+	}
 	return bulkResp, nil
 }
 
@@ -450,9 +444,12 @@ func (a *api) GetState(ctx context.Context, in *runtimev1pb.GetStateRequest) (*r
 		apiServerLogger.Debug(err)
 		return &runtimev1pb.GetStateResponse{}, err
 	}
-
+	key, err := state_loader.GetModifiedStateKey(in.Key, in.StoreName, a.id)
+	if err != nil {
+		return &runtimev1pb.GetStateResponse{}, err
+	}
 	req := state.GetRequest{
-		Key:      state_loader.GetModifiedStateKey(in.Key, in.StoreName, a.id),
+		Key:      key,
 		Metadata: in.Metadata,
 		Options: state.GetStateOption{
 			Consistency: stateConsistencyToString(in.Consistency),
@@ -468,7 +465,7 @@ func (a *api) GetState(ctx context.Context, in *runtimev1pb.GetStateRequest) (*r
 
 	response := &runtimev1pb.GetStateResponse{}
 	if getResponse != nil {
-		response.Etag = getResponse.ETag
+		response.Etag = stringValueOrEmpty(getResponse.ETag)
 		response.Data = getResponse.Data
 		response.Metadata = getResponse.Metadata
 	}
@@ -484,8 +481,12 @@ func (a *api) SaveState(ctx context.Context, in *runtimev1pb.SaveStateRequest) (
 
 	reqs := []state.SetRequest{}
 	for _, s := range in.States {
+		key, err1 := state_loader.GetModifiedStateKey(s.Key, in.StoreName, a.id)
+		if err1 != nil {
+			return &emptypb.Empty{}, err1
+		}
 		req := state.SetRequest{
-			Key:      state_loader.GetModifiedStateKey(s.Key, in.StoreName, a.id),
+			Key:      key,
 			Metadata: s.Metadata,
 			Value:    s.Value,
 		}
@@ -510,7 +511,7 @@ func (a *api) SaveState(ctx context.Context, in *runtimev1pb.SaveStateRequest) (
 	return &emptypb.Empty{}, nil
 }
 
-// stateErrorResponse takes a state store error, format and args and returns a status code encoded gRPC error
+// stateErrorResponse takes a state store error, format and args and returns a status code encoded gRPC error.
 func (a *api) stateErrorResponse(err error, format string, args ...interface{}) error {
 	e, ok := err.(*state.ETagError)
 	if !ok {
@@ -533,8 +534,12 @@ func (a *api) DeleteState(ctx context.Context, in *runtimev1pb.DeleteStateReques
 		return &emptypb.Empty{}, err
 	}
 
+	key, err := state_loader.GetModifiedStateKey(in.Key, in.StoreName, a.id)
+	if err != nil {
+		return &empty.Empty{}, err
+	}
 	req := state.DeleteRequest{
-		Key:      state_loader.GetModifiedStateKey(in.Key, in.StoreName, a.id),
+		Key:      key,
 		Metadata: in.Metadata,
 	}
 	if in.Etag != nil {
@@ -565,8 +570,12 @@ func (a *api) DeleteBulkState(ctx context.Context, in *runtimev1pb.DeleteBulkSta
 
 	reqs := make([]state.DeleteRequest, 0, len(in.States))
 	for _, item := range in.States {
+		key, err1 := state_loader.GetModifiedStateKey(item.Key, in.StoreName, a.id)
+		if err1 != nil {
+			return &empty.Empty{}, err1
+		}
 		req := state.DeleteRequest{
-			Key:      state_loader.GetModifiedStateKey(item.Key, in.StoreName, a.id),
+			Key:      key,
 			Metadata: item.Metadata,
 		}
 		if item.Etag != nil {
@@ -615,7 +624,6 @@ func (a *api) GetSecret(ctx context.Context, in *runtimev1pb.GetSecretRequest) (
 	}
 
 	getResponse, err := a.secretStores[secretStoreName].GetSecret(req)
-
 	if err != nil {
 		err = status.Errorf(codes.Internal, messages.ErrSecretGet, req.Name, secretStoreName, err.Error())
 		apiServerLogger.Debug(err)
@@ -649,7 +657,6 @@ func (a *api) GetBulkSecret(ctx context.Context, in *runtimev1pb.GetBulkSecretRe
 	}
 
 	getResponse, err := a.secretStores[secretStoreName].BulkGetSecret(req)
-
 	if err != nil {
 		err = status.Errorf(codes.Internal, messages.ErrBulkSecretGet, secretStoreName, err.Error())
 		apiServerLogger.Debug(err)
@@ -697,7 +704,7 @@ func (a *api) ExecuteStateTransaction(ctx context.Context, in *runtimev1pb.Execu
 		return &emptypb.Empty{}, err
 	}
 
-	transactionalStore, ok := a.stateStores[storeName].(state.TransactionalStore)
+	transactionalStore, ok := a.transactionalStateStores[storeName]
 	if !ok {
 		err := status.Errorf(codes.Unimplemented, messages.ErrStateStoreNotSupported, storeName)
 		apiServerLogger.Debug(err)
@@ -707,14 +714,17 @@ func (a *api) ExecuteStateTransaction(ctx context.Context, in *runtimev1pb.Execu
 	operations := []state.TransactionalStateOperation{}
 	for _, inputReq := range in.Operations {
 		var operation state.TransactionalStateOperation
-		var req = inputReq.Request
+		req := inputReq.Request
 
 		hasEtag, etag := extractEtag(req)
-
+		key, err := state_loader.GetModifiedStateKey(req.Key, in.StoreName, a.id)
+		if err != nil {
+			return &emptypb.Empty{}, err
+		}
 		switch state.OperationType(inputReq.OperationType) {
 		case state.Upsert:
 			setReq := state.SetRequest{
-				Key: state_loader.GetModifiedStateKey(req.Key, in.StoreName, a.id),
+				Key: key,
 				// Limitation:
 				// components that cannot handle byte array need to deserialize/serialize in
 				// component specific way in components-contrib repo.
@@ -739,7 +749,7 @@ func (a *api) ExecuteStateTransaction(ctx context.Context, in *runtimev1pb.Execu
 
 		case state.Delete:
 			delReq := state.DeleteRequest{
-				Key:      state_loader.GetModifiedStateKey(req.Key, in.StoreName, a.id),
+				Key:      key,
 				Metadata: req.Metadata,
 			}
 
@@ -771,7 +781,6 @@ func (a *api) ExecuteStateTransaction(ctx context.Context, in *runtimev1pb.Execu
 		Operations: operations,
 		Metadata:   in.Metadata,
 	})
-
 	if err != nil {
 		err = status.Errorf(codes.Internal, messages.ErrStateTransaction, err.Error())
 		apiServerLogger.Debug(err)
@@ -1003,24 +1012,6 @@ func (a *api) isSecretAllowed(storeName, key string) bool {
 	return true
 }
 
-func emitACLMetrics(actionPolicy, appID, trustDomain, namespace, operation, verb string, action bool) {
-	if action {
-		switch actionPolicy {
-		case config.ActionPolicyApp:
-			diag.DefaultMonitoring.RequestAllowedByAppAction(appID, trustDomain, namespace, operation, verb, action)
-		case config.ActionPolicyGlobal:
-			diag.DefaultMonitoring.RequestAllowedByGlobalAction(appID, trustDomain, namespace, operation, verb, action)
-		}
-	} else {
-		switch actionPolicy {
-		case config.ActionPolicyApp:
-			diag.DefaultMonitoring.RequestBlockedByAppAction(appID, trustDomain, namespace, operation, verb, action)
-		case config.ActionPolicyGlobal:
-			diag.DefaultMonitoring.RequestBlockedByGlobalAction(appID, trustDomain, namespace, operation, verb, action)
-		}
-	}
-}
-
 func (a *api) SetAppChannel(appChannel channel.AppChannel) {
 	a.appChannel = appChannel
 }
@@ -1041,7 +1032,7 @@ func (a *api) GetMetadata(ctx context.Context, in *emptypb.Empty) (*runtimev1pb.
 		temp[key.(string)] = value.(string)
 		return true
 	})
-	registeredComponents := []*runtimev1pb.RegisteredComponents{}
+	registeredComponents := make([]*runtimev1pb.RegisteredComponents, 0, len(a.components))
 
 	for _, comp := range a.components {
 		registeredComp := &runtimev1pb.RegisteredComponents{
@@ -1058,8 +1049,25 @@ func (a *api) GetMetadata(ctx context.Context, in *emptypb.Empty) (*runtimev1pb.
 	return response, nil
 }
 
-// Sets value in extended metadata of the sidecar
+// Sets value in extended metadata of the sidecar.
 func (a *api) SetMetadata(ctx context.Context, in *runtimev1pb.SetMetadataRequest) (*emptypb.Empty, error) {
 	a.extendedMetadata.Store(in.Key, in.Value)
 	return &emptypb.Empty{}, nil
+}
+
+// Shutdown the sidecar.
+func (a *api) Shutdown(ctx context.Context, in *emptypb.Empty) (*emptypb.Empty, error) {
+	go func() {
+		<-ctx.Done()
+		a.shutdown()
+	}()
+	return &emptypb.Empty{}, nil
+}
+
+func stringValueOrEmpty(value *string) string {
+	if value == nil {
+		return ""
+	}
+
+	return *value
 }

@@ -1,5 +1,5 @@
 // ------------------------------------------------------------
-// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
 // Licensed under the MIT License.
 // ------------------------------------------------------------
 
@@ -8,8 +8,9 @@ package metrics
 import (
 	"testing"
 
-	"github.com/dapr/dapr/pkg/logger"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/dapr/kit/logger"
 )
 
 func TestMetricsExporter(t *testing.T) {

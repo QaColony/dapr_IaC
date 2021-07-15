@@ -1,5 +1,5 @@
 // ------------------------------------------------------------
-// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
 // Licensed under the MIT License.
 // ------------------------------------------------------------
 
@@ -9,28 +9,33 @@ import (
 	"flag"
 	"time"
 
-	"github.com/dapr/dapr/pkg/logger"
+	"k8s.io/klog"
+
+	"github.com/dapr/kit/logger"
+
 	"github.com/dapr/dapr/pkg/metrics"
 	"github.com/dapr/dapr/pkg/operator"
 	"github.com/dapr/dapr/pkg/operator/monitoring"
 	"github.com/dapr/dapr/pkg/signals"
 	"github.com/dapr/dapr/pkg/version"
-	"k8s.io/klog"
 )
 
-var log = logger.NewLogger("dapr.operator")
-var config string
-var certChainPath string
-var disableLeaderElection bool
+var (
+	log                   = logger.NewLogger("dapr.operator")
+	config                string
+	certChainPath         string
+	disableLeaderElection bool
+)
 
 const (
 	defaultCredentialsPath = "/var/run/dapr/credentials"
 
-	// defaultDaprSystemConfigName is the default resource object name for Dapr System Config
+	// defaultDaprSystemConfigName is the default resource object name for Dapr System Config.
 	defaultDaprSystemConfigName = "daprsystem"
 )
 
 func main() {
+	logger.DaprVersion = version.Version()
 	log.Infof("starting Dapr Operator -- version %s -- commit %s", version.Version(), version.Commit())
 
 	ctx := signals.Context()

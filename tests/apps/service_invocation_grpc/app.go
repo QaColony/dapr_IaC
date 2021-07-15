@@ -1,17 +1,15 @@
 // ------------------------------------------------------------
-// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
 // Licensed under the MIT License.
 // ------------------------------------------------------------
 
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
-
-	"context"
-
 	"net"
 
 	"go.opencensus.io/trace"

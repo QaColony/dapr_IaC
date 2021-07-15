@@ -1,7 +1,7 @@
 // +build e2e
 
 // ------------------------------------------------------------
-// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
 // Licensed under the MIT License.
 // ------------------------------------------------------------
 
@@ -18,6 +18,7 @@ import (
 	"github.com/dapr/dapr/tests/e2e/utils"
 	kube "github.com/dapr/dapr/tests/platforms/kubernetes"
 	"github.com/dapr/dapr/tests/runner"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -52,7 +53,7 @@ const (
 	// Number of times to call the endpoint to check for health.
 	numHealthChecks = 60
 	// Number of seconds to wait for binding travelling throughout the cluster.
-	bindingPropagationDelay = 5
+	bindingPropagationDelay = 10
 )
 
 var tr *runner.TestRunner
@@ -67,6 +68,7 @@ func TestMain(m *testing.M) {
 			ImageName:      "e2e-binding_input",
 			Replicas:       1,
 			IngressEnabled: true,
+			MetricsEnabled: true,
 		},
 		{
 			AppName:        "bindingoutput",
@@ -74,6 +76,16 @@ func TestMain(m *testing.M) {
 			ImageName:      "e2e-binding_output",
 			Replicas:       1,
 			IngressEnabled: true,
+			MetricsEnabled: true,
+		},
+		{
+			AppName:        "bindinginputgrpc",
+			DaprEnabled:    true,
+			ImageName:      "e2e-binding_input_grpc",
+			Replicas:       1,
+			IngressEnabled: true,
+			MetricsEnabled: true,
+			AppProtocol:    "grpc",
 		},
 	}
 
@@ -87,7 +99,8 @@ func TestBindings(t *testing.T) {
 	require.NotEmpty(t, outputExternalURL, "bindingoutput external URL must not be empty!")
 	inputExternalURL := tr.Platform.AcquireAppExternalURL("bindinginput")
 	require.NotEmpty(t, inputExternalURL, "bindinginput external URL must not be empty!")
-
+	inputGRPCExternalURL := tr.Platform.AcquireAppExternalURL("bindinginputgrpc")
+	require.NotEmpty(t, inputGRPCExternalURL, "bindinginput external URL must not be empty!")
 	// This initial probe makes the test wait a little bit longer when needed,
 	// making this test less flaky due to delays in the deployment.
 	_, err := utils.HTTPGetNTimes(outputExternalURL, numHealthChecks)
@@ -102,16 +115,35 @@ func TestBindings(t *testing.T) {
 	body, err := json.Marshal(req)
 	require.NoError(t, err)
 
-	// act
+	// act for http
 	httpPostWithAssert(t, fmt.Sprintf("%s/tests/send", outputExternalURL), body, http.StatusOK)
 
 	// This delay allows all the messages to reach corresponding input bindings.
 	time.Sleep(bindingPropagationDelay * time.Second)
 
-	// assert
+	// assert for HTTP
 	resp := httpPostWithAssert(t, fmt.Sprintf("%s/tests/get_received_topics", inputExternalURL), nil, http.StatusOK)
 
 	var decodedResponse receivedTopicsResponse
+	err = json.Unmarshal(resp, &decodedResponse)
+	require.NoError(t, err)
+
+	// Only the first message fails, all other messages are successfully consumed.
+	// nine messages succeed.
+	require.Equal(t, testMessages[1:], decodedResponse.ReceivedMessages)
+	// one message fails.
+	require.Equal(t, testMessages[0], decodedResponse.FailedMessage)
+
+	// act for gRPC
+	httpPostWithAssert(t, fmt.Sprintf("%s/tests/sendGRPC", outputExternalURL), body, http.StatusOK)
+
+	// This delay allows all the messages to reach corresponding input bindings.
+	time.Sleep(bindingPropagationDelay * time.Second)
+
+	// assert for gRPC
+	resp = httpPostWithAssert(t, fmt.Sprintf("%s/tests/get_received_topics_grpc", outputExternalURL), nil, http.StatusOK)
+
+	// assert for gRPC
 	err = json.Unmarshal(resp, &decodedResponse)
 	require.NoError(t, err)
 

@@ -1,5 +1,5 @@
 # ------------------------------------------------------------
-# Copyright (c) Microsoft Corporation.
+# Copyright (c) Microsoft Corporation and Dapr Contributors.
 # Licensed under the MIT License.
 # ------------------------------------------------------------
 
@@ -8,12 +8,16 @@
 E2E_TEST_APPS=actorjava \
 actordotnet \
 actorpython \
+actorphp \
 hellodapr \
 stateapp \
 secretapp \
 service_invocation \
 service_invocation_grpc \
+service_invocation_grpc_proxy_client \
+service_invocation_grpc_proxy_server \
 binding_input \
+binding_input_grpc \
 binding_output \
 pubsub-publisher \
 pubsub-subscriber \
@@ -22,12 +26,14 @@ actorapp \
 actorclientapp \
 actorfeatures \
 actorinvocationapp \
+actorreentrancy \
 runtime \
 runtime_init \
-middleware
+middleware \
+job-publisher \
 
-# PERFORMACE test app list
-PERF_TEST_APPS=actorjava tester service_invocation_http
+# PERFORMANCE test app list
+PERF_TEST_APPS=actorfeatures actorjava tester service_invocation_http
 
 # E2E test app root directory
 E2E_TESTAPP_DIR=./tests/apps
@@ -36,7 +42,7 @@ E2E_TESTAPP_DIR=./tests/apps
 PERF_TESTAPP_DIR=./tests/apps/perf
 
 # PERFORMANCE tests
-PERF_TESTS=actor_timer actor_activation service_invocation_http
+PERF_TESTS=actor_timer actor_reminder actor_activation service_invocation_http
 
 KUBECTL=kubectl
 
@@ -79,11 +85,7 @@ ifeq (,$(wildcard $(E2E_TESTAPP_DIR)/$(1)/$(DOCKERFILE)))
 	CGO_ENABLED=0 GOOS=$(TARGET_OS) GOARCH=$(TARGET_ARCH) go build -o $(E2E_TESTAPP_DIR)/$(1)/app$(BINARY_EXT_LOCAL) $(E2E_TESTAPP_DIR)/$(1)/app.go
 	$(DOCKER) build -f $(E2E_TESTAPP_DIR)/$(DOCKERFILE) $(E2E_TESTAPP_DIR)/$(1)/. -t $(DAPR_TEST_REGISTRY)/e2e-$(1):$(DAPR_TEST_TAG)
 else
-# Builds of E2E apps within Docker works for Windows but are too slow. Disabling them for now.
-# See https://github.com/dapr/dapr/issues/2695
-ifeq ($(TARGET_OS),linux)
 	$(DOCKER) build -f $(E2E_TESTAPP_DIR)/$(1)/$(DOCKERFILE) $(E2E_TESTAPP_DIR)/$(1)/. -t $(DAPR_TEST_REGISTRY)/e2e-$(1):$(DAPR_TEST_TAG)
-endif
 endif
 endef
 
@@ -93,15 +95,7 @@ $(foreach ITEM,$(E2E_TEST_APPS),$(eval $(call genTestAppImageBuild,$(ITEM))))
 define genTestAppImagePush
 .PHONY: push-e2e-app-$(1)
 push-e2e-app-$(1): check-e2e-env
-ifeq ($(TARGET_OS),windows)
-ifeq (,$(wildcard $(E2E_TESTAPP_DIR)/$(1)/$(DOCKERFILE)))
-# Builds of E2E apps within Docker works for Windows but are too slow. Disabling them for now.
-# See https://github.com/dapr/dapr/issues/2695
 	$(DOCKER) push $(DAPR_TEST_REGISTRY)/e2e-$(1):$(DAPR_TEST_TAG)
-endif
-else
-	$(DOCKER) push $(DAPR_TEST_REGISTRY)/e2e-$(1):$(DAPR_TEST_TAG)
-endif
 endef
 
 # Generate test app image push targets
@@ -161,14 +155,22 @@ build-perf-app-all: $(BUILD_PERF_APPS_TARGETS)
 # push perf app image to the registry
 push-perf-app-all: $(PUSH_PERF_APPS_TARGETS)
 
+.PHONY: test-deps
+test-deps:
+	# The desire here is to download this test dependency without polluting go.mod
+	# In golang >=1.16 there is a new way to do this with `go install gotest.tools/gotestsum@latest`
+	# But this doesn't work with <=1.15, so we do it the old way for now 
+	# (see: https://golang.org/ref/mod#go-install)
+	command -v gotestsum || GO111MODULE=off go get gotest.tools/gotestsum
+
 # start all e2e tests
-test-e2e-all: check-e2e-env
+test-e2e-all: check-e2e-env test-deps
 	# Note: we can set -p 2 to run two tests apps at a time, because today we do not share state between
 	# tests. In the future, if we add any tests that modify global state (such as dapr config), we'll 
 	# have to be sure and run them after the main test suite, so as not to alter the state of a running
 	# test
 	# Note2: use env variable DAPR_E2E_TEST to pick one e2e test to run.
-	DAPR_CONTAINER_LOG_PATH=$(DAPR_CONTAINER_LOG_PATH) GOOS=$(TARGET_OS_LOCAL) DAPR_TEST_NAMESPACE=$(DAPR_TEST_NAMESPACE) DAPR_TEST_TAG=$(DAPR_TEST_TAG) DAPR_TEST_REGISTRY=$(DAPR_TEST_REGISTRY) DAPR_TEST_MINIKUBE_IP=$(MINIKUBE_NODE_IP) go test -p 2 -count=1 -v -tags=e2e ./tests/e2e/$(DAPR_E2E_TEST)/...
+	DAPR_CONTAINER_LOG_PATH=$(DAPR_CONTAINER_LOG_PATH) GOOS=$(TARGET_OS_LOCAL) DAPR_TEST_NAMESPACE=$(DAPR_TEST_NAMESPACE) DAPR_TEST_TAG=$(DAPR_TEST_TAG) DAPR_TEST_REGISTRY=$(DAPR_TEST_REGISTRY) DAPR_TEST_MINIKUBE_IP=$(MINIKUBE_NODE_IP) gotestsum --jsonfile $(TEST_OUTPUT_FILE_PREFIX)_e2e.json --format standard-quiet -- -p 2 -count=1 -v -tags=e2e ./tests/e2e/$(DAPR_E2E_TEST)/...
 
 
 define genPerfTestRun
@@ -232,6 +234,7 @@ setup-test-components: setup-app-configurations
 	$(KUBECTL) apply -f ./tests/config/dapr_tests_cluster_role_binding.yaml --namespace $(DAPR_TEST_NAMESPACE)
 	$(KUBECTL) apply -f ./tests/config/dapr_redis_pubsub.yaml --namespace $(DAPR_TEST_NAMESPACE)
 	$(KUBECTL) apply -f ./tests/config/dapr_kafka_bindings.yaml --namespace $(DAPR_TEST_NAMESPACE)
+	$(KUBECTL) apply -f ./tests/config/dapr_kafka_bindings_grpc.yaml --namespace $(DAPR_TEST_NAMESPACE)
 	$(KUBECTL) apply -f ./tests/config/app_topic_subscription_pubsub.yaml --namespace $(DAPR_TEST_NAMESPACE)
 	$(KUBECTL) apply -f ./tests/config/kubernetes_allowlists_config.yaml --namespace $(DAPR_TEST_NAMESPACE)
 	$(KUBECTL) apply -f ./tests/config/kubernetes_allowlists_grpc_config.yaml --namespace $(DAPR_TEST_NAMESPACE)
@@ -239,9 +242,15 @@ setup-test-components: setup-app-configurations
 	$(KUBECTL) apply -f ./tests/config/dapr_redis_state_badpass.yaml --namespace $(DAPR_TEST_NAMESPACE)
 	$(KUBECTL) apply -f ./tests/config/uppercase.yaml --namespace $(DAPR_TEST_NAMESPACE)
 	$(KUBECTL) apply -f ./tests/config/pipeline.yaml --namespace $(DAPR_TEST_NAMESPACE)
+	$(KUBECTL) apply -f ./tests/config/app_reentrant_actor.yaml --namespace $(DAPR_TEST_NAMESPACE)
+	$(KUBECTL) apply -f ./tests/config/app_actor_type_metadata.yaml --namespace $(DAPR_TEST_NAMESPACE)
+	$(KUBECTL) apply -f ./tests/config/kubernetes_grpc_proxy_config.yaml --namespace $(DAPR_TEST_NAMESPACE)
 
 	# Show the installed components
 	$(KUBECTL) get components --namespace $(DAPR_TEST_NAMESPACE)
+
+	# Show the installed configurations
+	$(KUBECTL) get configurations --namespace $(DAPR_TEST_NAMESPACE)
 
 # Clean up test environment
 clean-test-env:
@@ -278,15 +287,15 @@ else
 endif
 
 setup-minikube-darwin:
-	minikube start --memory=4g --cpus=4 --driver=hyperkit --kubernetes-version=v1.18.9
+	minikube start --memory=4g --cpus=4 --driver=hyperkit --kubernetes-version=v1.18.8
 	minikube addons enable metrics-server
 
 setup-minikube-windows:
-	minikube start --memory=4g --cpus=4 --kubernetes-version=v1.18.9
+	minikube start --memory=4g --cpus=4 --kubernetes-version=v1.18.8
 	minikube addons enable metrics-server
 
 setup-minikube-linux:
-	minikube start --memory=4g --cpus=4 --kubernetes-version=v1.18.9
+	minikube start --memory=4g --cpus=4 --kubernetes-version=v1.18.8
 	minikube addons enable metrics-server
 
 setup-minikube: setup-minikube-$(detected_OS)

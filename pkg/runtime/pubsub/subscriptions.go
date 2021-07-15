@@ -3,19 +3,21 @@ package pubsub
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io/ioutil"
 	"net/http"
 	"os"
+	"path/filepath"
+
+	"github.com/ghodss/yaml"
+	"google.golang.org/protobuf/types/known/emptypb"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	subscriptionsapi "github.com/dapr/dapr/pkg/apis/subscriptions/v1alpha1"
 	"github.com/dapr/dapr/pkg/channel"
-	"github.com/dapr/dapr/pkg/logger"
 	invokev1 "github.com/dapr/dapr/pkg/messaging/v1"
 	operatorv1pb "github.com/dapr/dapr/pkg/proto/operator/v1"
 	runtimev1pb "github.com/dapr/dapr/pkg/proto/runtime/v1"
-	"github.com/ghodss/yaml"
-	"google.golang.org/protobuf/types/known/emptypb"
+	"github.com/dapr/kit/logger"
 )
 
 const (
@@ -90,7 +92,7 @@ func GetSubscriptionsGRPC(channel runtimev1pb.AppCallbackClient, log logger.Logg
 	return subscriptions
 }
 
-// DeclarativeSelfHosted loads subscriptions from the given components path
+// DeclarativeSelfHosted loads subscriptions from the given components path.
 func DeclarativeSelfHosted(componentsPath string, log logger.Logger) []Subscription {
 	var subs []Subscription
 
@@ -106,7 +108,7 @@ func DeclarativeSelfHosted(componentsPath string, log logger.Logger) []Subscript
 
 	for _, f := range files {
 		if !f.IsDir() {
-			filePath := fmt.Sprintf("%s/%s", componentsPath, f.Name())
+			filePath := filepath.Join(componentsPath, f.Name())
 			b, err := ioutil.ReadFile(filePath)
 			if err != nil {
 				log.Errorf("failed to read file %s: %s", filePath, err)
@@ -124,25 +126,38 @@ func DeclarativeSelfHosted(componentsPath string, log logger.Logger) []Subscript
 }
 
 func marshalSubscription(b []byte) (*Subscription, error) {
-	var sub subscriptionsapi.Subscription
-	err := yaml.Unmarshal(b, &sub)
+	// Parse only the type metadata first in order
+	// to filter out non-Subscriptions without other errors.
+	type typeInfo struct {
+		metav1.TypeMeta `json:",inline"`
+	}
+
+	var ti typeInfo
+	err := yaml.Unmarshal(b, &ti)
 	if err != nil {
 		return nil, err
 	}
 
-	if sub.Kind != subscriptionKind {
+	if ti.Kind != subscriptionKind {
 		return nil, nil
+	}
+
+	var sub subscriptionsapi.Subscription
+	err = yaml.Unmarshal(b, &sub)
+	if err != nil {
+		return nil, err
 	}
 
 	return &Subscription{
 		Topic:      sub.Spec.Topic,
 		PubsubName: sub.Spec.Pubsubname,
 		Route:      sub.Spec.Route,
+		Metadata:   sub.Spec.Metadata,
 		Scopes:     sub.Scopes,
 	}, nil
 }
 
-// DeclarativeKubernetes loads subscriptions from the operator when running in Kubernetes
+// DeclarativeKubernetes loads subscriptions from the operator when running in Kubernetes.
 func DeclarativeKubernetes(client operatorv1pb.OperatorClient, log logger.Logger) []Subscription {
 	var subs []Subscription
 	resp, err := client.ListSubscriptions(context.TODO(), &emptypb.Empty{})

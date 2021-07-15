@@ -1,5 +1,5 @@
 // ------------------------------------------------------------
-// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
 // Licensed under the MIT License.
 // ------------------------------------------------------------
 
@@ -8,9 +8,10 @@ package messaging
 import (
 	"testing"
 
-	invokev1 "github.com/dapr/dapr/pkg/messaging/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/valyala/fasthttp"
+
+	invokev1 "github.com/dapr/dapr/pkg/messaging/v1"
 )
 
 func newDirectMessaging() *directMessaging {
@@ -49,6 +50,33 @@ func TestForwardedHeaders(t *testing.T) {
 
 		md = req.Metadata()[fasthttp.HeaderForwarded]
 		assert.Equal(t, "for=1;by=1;host=2", md.Values[0])
+	})
+
+	t.Run("forwarded headers get appended", func(t *testing.T) {
+		req := invokev1.NewInvokeMethodRequest("GET")
+		req.WithMetadata(map[string][]string{
+			fasthttp.HeaderXForwardedFor:  {"originalXForwardedFor"},
+			fasthttp.HeaderXForwardedHost: {"originalXForwardedHost"},
+			fasthttp.HeaderForwarded:      {"originalForwarded"},
+		})
+
+		dm := newDirectMessaging()
+		dm.hostAddress = "1"
+		dm.hostName = "2"
+
+		dm.addForwardedHeadersToMetadata(req)
+
+		md := req.Metadata()[fasthttp.HeaderXForwardedFor]
+		assert.Equal(t, "originalXForwardedFor", md.Values[0])
+		assert.Equal(t, "1", md.Values[1])
+
+		md = req.Metadata()[fasthttp.HeaderXForwardedHost]
+		assert.Equal(t, "originalXForwardedHost", md.Values[0])
+		assert.Equal(t, "2", md.Values[1])
+
+		md = req.Metadata()[fasthttp.HeaderForwarded]
+		assert.Equal(t, "originalForwarded", md.Values[0])
+		assert.Equal(t, "for=1;by=1;host=2", md.Values[1])
 	})
 }
 

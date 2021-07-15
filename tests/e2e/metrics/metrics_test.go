@@ -1,7 +1,7 @@
 // +build e2e
 
 // ------------------------------------------------------------
-// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
 // Licensed under the MIT License.
 // ------------------------------------------------------------
 
@@ -49,6 +49,7 @@ func TestMain(m *testing.M) {
 			ImageName:      "e2e-hellodapr",
 			Replicas:       1,
 			IngressEnabled: true,
+			MetricsEnabled: true,
 		},
 		{
 			AppName: "grpcmetrics",
@@ -59,6 +60,7 @@ func TestMain(m *testing.M) {
 			ImageName:      "e2e-stateapp",
 			Replicas:       1,
 			IngressEnabled: true,
+			MetricsEnabled: true,
 		},
 		{
 			AppName:        "disabledmetric",
@@ -67,6 +69,7 @@ func TestMain(m *testing.M) {
 			ImageName:      "e2e-hellodapr",
 			Replicas:       1,
 			IngressEnabled: true,
+			MetricsEnabled: true,
 		},
 	}
 
@@ -211,7 +214,11 @@ func findHTTPMetricFromPrometheus(t *testing.T, app string, res *http.Response) 
 						foundPath = true
 
 						if strings.Contains(l.GetValue(), "healthz") {
-							require.Equal(t, "/v1.0/healthz", l.GetValue())
+							if strings.Contains(l.GetValue(), "outbound") {
+								require.Equal(t, "/v1.0/healthz/outbound", l.GetValue())
+							} else {
+								require.Equal(t, "/v1.0/healthz", l.GetValue())
+							}
 						} else {
 							require.Equal(t, fmt.Sprintf("/v1.0/invoke/%s/method/tests/green", app), l.GetValue())
 						}

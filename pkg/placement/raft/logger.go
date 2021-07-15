@@ -1,5 +1,5 @@
 // ------------------------------------------------------------
-// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
 // Licensed under the MIT License.
 // ------------------------------------------------------------
 
@@ -10,8 +10,9 @@ import (
 	"io/ioutil"
 	"log"
 
-	"github.com/dapr/dapr/pkg/logger"
 	"github.com/hashicorp/go-hclog"
+
+	"github.com/dapr/kit/logger"
 )
 
 var logging = logger.NewLogger("dapr.placement.raft")

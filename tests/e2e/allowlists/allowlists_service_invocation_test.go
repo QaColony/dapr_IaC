@@ -1,7 +1,7 @@
 // +build e2e
 
 // ------------------------------------------------------------
-// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
 // Licensed under the MIT License.
 // ------------------------------------------------------------
 
@@ -43,6 +43,7 @@ func TestMain(m *testing.M) {
 			ImageName:      "e2e-service_invocation",
 			Replicas:       1,
 			IngressEnabled: true,
+			MetricsEnabled: true,
 		},
 		{
 			Config:         "allowlistsappconfig",
@@ -51,6 +52,7 @@ func TestMain(m *testing.M) {
 			ImageName:      "e2e-service_invocation",
 			Replicas:       1,
 			IngressEnabled: false,
+			MetricsEnabled: true,
 		},
 		{
 			Config:         "allowlistsgrpcappconfig",
@@ -59,6 +61,7 @@ func TestMain(m *testing.M) {
 			ImageName:      "e2e-service_invocation_grpc",
 			Replicas:       1,
 			IngressEnabled: false,
+			MetricsEnabled: true,
 			AppProtocol:    "grpc",
 		},
 	}
@@ -128,7 +131,7 @@ func TestServiceInvocationWithAllowLists(t *testing.T) {
 			})
 			require.NoError(t, err)
 
-			var url string;
+			var url string
 			if tt.calleeSide == "http" {
 				url = fmt.Sprintf("%s/tests/invoke_test", externalURL)
 			} else {

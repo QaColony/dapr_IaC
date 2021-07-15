@@ -1,5 +1,5 @@
 // ------------------------------------------------------------
-// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation and Dapr Contributors.
 // Licensed under the MIT License.
 // ------------------------------------------------------------
 
@@ -52,7 +52,7 @@ var (
 	bindingsDaprGRPCError, bindingsDaprGRPCSuccess uint32
 )
 
-// indexHandler is the handler for root path
+// indexHandler is the handler for root path.
 func indexHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("indexHandler is called\n")
 
@@ -197,7 +197,7 @@ func getBindingsDaprAPIResponse(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-// appRouter initializes restful api router
+// appRouter initializes restful api router.
 func appRouter() *mux.Router {
 	log.Printf("Enter appRouter()")
 	router := mux.NewRouter().StrictSlash(true)
